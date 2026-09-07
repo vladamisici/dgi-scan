@@ -9,6 +9,7 @@
 #include <QtXml>
 
 #include "AbstractFilter.h"
+#include "AtomicFileOverwriter.h"
 #include "FileNameDisambiguator.h"
 #include "ImageId.h"
 #include "ImageMetadata.h"
@@ -87,13 +88,33 @@ bool ProjectWriter::write(const QString& filePath, const std::vector<FilterPtr>&
     filtersEl.appendChild((*it)->saveSettings(*this, doc));
   }
 
-  QFile file(filePath);
-  if (file.open(QIODevice::WriteOnly)) {
-    QTextStream strm(&file);
-    doc.save(strm, 2);
-    return true;
+  // The project is written to a temporary file next to the target and only then
+  // renamed over it. Opening the target directly with QIODevice::WriteOnly - as
+  // this used to do - truncates the existing project the instant the write
+  // begins, so any interruption between that moment and the last byte (a crash,
+  // an out-of-memory kill, a network share dropping out) leaves the operator
+  // with a truncated or empty project and the work of a whole title gone. With a
+  // temp file plus rename, an interrupted save leaves the previous project
+  // untouched: the worst case is losing the current save, not the project.
+  //
+  // Note that the QTextStream codec is deliberately left at its default so the
+  // on-disk encoding stays byte-for-byte what previous versions produced.
+  AtomicFileOverwriter overwriter;
+  QIODevice* const device = overwriter.startWriting(filePath);
+  if (!device) {
+    return false;
   }
-  return false;
+
+  {
+    QTextStream strm(device);
+    doc.save(strm, 2);
+    strm.flush();
+    if (strm.status() != QTextStream::Ok) {
+      overwriter.abort();
+      return false;
+    }
+  }
+  return overwriter.commit();
 }  // ProjectWriter::write
 
 QDomElement ProjectWriter::processDirectories(QDomDocument& doc) const {

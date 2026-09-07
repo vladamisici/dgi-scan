@@ -3,6 +3,7 @@
 
 #include "Settings.h"
 
+#include <cmath>
 #include <iostream>
 
 #include "../../Utils.h"

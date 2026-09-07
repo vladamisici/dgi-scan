@@ -8,6 +8,7 @@
 #include "BinaryImage.h"
 #include "BitOps.h"
 #include "ConnectivityMap.h"
+#include <stdexcept>
 
 class QImage;
 

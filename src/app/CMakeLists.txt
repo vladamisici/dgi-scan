@@ -78,5 +78,10 @@ target_include_directories(
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
     "$<TARGET_PROPERTY:TIFF::TIFF,INTERFACE_INCLUDE_DIRECTORIES>")
 install(TARGETS scantailor RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+if (MSVC)
+  # Ship the symbols with the binary. A minidump collected from an operator
+  # machine is unreadable without the .pdb that matches the exact build.
+  install(FILES "$<TARGET_PDB_FILE:scantailor>" DESTINATION "${CMAKE_INSTALL_BINDIR}" OPTIONAL)
+endif()
 
 translation_sources(scantailor ${gui_only_sources} ${gui_only_ui_files})

@@ -51,6 +51,7 @@ class ContentBoxPropagator;
 class PageOrientationPropagator;
 class ProjectCreationContext;
 class ProjectOpeningContext;
+class QSessionManager;
 class CompositeCacheDrivenTask;
 class TabbedDebugImages;
 class ProcessingTaskQueue;
@@ -88,12 +89,23 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void openProject(const QString& projectFile);
 
+  /**
+   * \brief Offers back a never-saved project left behind by an interrupted run.
+   *
+   * Called from main() once startup is complete, so that it does not compete
+   * with a project named on the command line.
+   */
+  void offerUnsavedSessionRecovery();
+
  private:
   enum MainAreaAction { UPDATE_MAIN_AREA, CLEAR_MAIN_AREA };
 
  private slots:
 
   void autoSaveProject();
+
+  /** rief Saves a recovery snapshot when the desktop session ends. */
+  void commitData(QSessionManager& manager);
 
   void goFirstPage();
 
@@ -160,9 +172,9 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void fixedDpiSubmitted();
 
-  void saveProjectTriggered();
+  bool saveProjectTriggered();
 
-  void saveProjectAsTriggered();
+  bool saveProjectAsTriggered();
 
   void newProject();
 
@@ -191,6 +203,8 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   enum SavePromptResult { SAVE, DONT_SAVE, CANCEL };
 
+  enum RecoveryPromptResult { RECOVER, DISCARD_RECOVERY, CANCEL_RECOVERY };
+
   using FilterPtr = std::shared_ptr<AbstractFilter>;
 
   static void removeWidgetsFromLayout(QLayout* layout);
@@ -216,6 +230,11 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   void showNewOpenProjectPanel();
 
   SavePromptResult promptProjectSave();
+
+  /**
+   * rief Asks what to do with a recovery snapshot left by an interrupted session.
+   */
+  RecoveryPromptResult promptProjectRecovery(const QString& projectFile);
 
   static bool compareFiles(const QString& fpath1, const QString& fpath2);
 
@@ -261,6 +280,14 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   void closeProjectWithoutSaving();
 
   bool saveProjectWithFeedback(const QString& projectFile);
+
+  /**
+   * rief Writes the project without reporting failures to the user.
+   *
+   * For unattended saves, where a modal warning would interrupt the operator
+   * mid-edit. Failures go to the log instead.
+   */
+  bool writeProjectQuietly(const QString& projectFile);
 
   void showInsertFileDialog(BeforeOrAfter beforeOrAfter, const ImageId& existig);
 
@@ -327,6 +354,8 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   int m_ignorePageOrderingChanges;
   bool m_debug;
   bool m_closing;
+  /** Guards against re-entering the deferred close sequence. \see closeEvent() */
+  bool m_closeRequested;
   QTimer m_autoSaveTimer;
   StatusBarPanel* m_statusBarPanel;
   QActionGroup* m_unitsMenuActionGroup;

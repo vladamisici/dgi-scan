@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <set>
+#include <stdexcept>
 #include <unordered_set>
 
 #include "BinaryImage.h"

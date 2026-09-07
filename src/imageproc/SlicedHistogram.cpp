@@ -5,6 +5,7 @@
 
 #include "BinaryImage.h"
 #include "BitOps.h"
+#include <stdexcept>
 
 namespace imageproc {
 SlicedHistogram::SlicedHistogram() = default;

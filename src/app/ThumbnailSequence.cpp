@@ -22,6 +22,7 @@
 #include <boost/multi_index/mem_fun.hpp>
 #include <boost/multi_index/sequenced_index.hpp>
 #include <boost/multi_index_container.hpp>
+#include <cmath>
 #include <memory>
 
 #include "ColorSchemeManager.h"
@@ -485,6 +486,15 @@ void ThumbnailSequence::Impl::reset(const PageSequence& pages,
     const Item* item = &m_itemsInOrder.back();
     item->composite->setItem(item);
 
+    // Finish the item here rather than leaving it to invalidateAllThumbnails().
+    // That call used to immediately build a second CompositeItem for every page
+    // and delete the one just created - doubling the work of loading a project
+    // and, because building a thumbnail item stats its file, doubling the
+    // per-page round trips to what is often a network share.
+    item->incompleteThumbnail = item->composite->incompleteThumbnail();
+    item->composite->updateAppearence(item->isSelected(), item->isSelectionLeader());
+    m_graphicsScene.addItem(item->composite);
+
     const ImageId& imageId = pageInfo.id().imageId();
 
     bool itemFound = (selected.find(pageInfo.id()) != selected.end());
@@ -512,7 +522,10 @@ void ThumbnailSequence::Impl::reset(const PageSequence& pages,
     }
   }
 
-  invalidateAllThumbnails();
+  // The composites are already built, scened and styled by the loop above; all
+  // that is left is what invalidateAllThumbnails() does after rebuilding them.
+  orderItems();
+  updateSceneItemsPos();
 
   if (!m_selectionLeader) {
     if (someSelectedItem) {
@@ -636,7 +649,11 @@ void ThumbnailSequence::Impl::invalidateThumbnailImpl(const ItemsById::iterator 
   CompositeItem* const oldComposite = idIt->composite;
   const QSizeF oldSize(oldComposite->boundingRect().size());
   const QSizeF newSize(newComposite->boundingRect().size());
-  const QPointF oldPos(newComposite->pos());
+  // The OLD item's position - this read newComposite, which has only just been
+  // created and so always sits at the origin. The comparison at the end of this
+  // function was therefore almost always true, emitting a selection-leader
+  // signal on every single thumbnail invalidation.
+  const QPointF oldPos(oldComposite->pos());
 
   idIt->composite = newComposite;
   idIt->incompleteThumbnail = newComposite->incompleteThumbnail();

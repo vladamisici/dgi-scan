@@ -6,10 +6,22 @@
 
 #include <foundation/NonCopyable.h>
 
+#include <QMutex>
+#include <QMutexLocker>
 #include <cmath>
 #include <functional>
 #include <unordered_map>
 
+/**
+ * rief Tracks per-page values and tells which of them deviate from the mean.
+ *
+ * Internally synchronised. Filter Settings objects update it from worker threads
+ * as pages finish processing, while the GUI thread reads it to decorate and sort
+ * thumbnails. Without a lock those two touch the same std::unordered_map
+ * concurrently, and a rehash triggered by an insert while the GUI thread is
+ * walking a bucket is a straightforward crash - one that gets more likely the
+ * more pages a project has. Locking here changes no computed value.
+ */
 template <typename K, typename Hash = std::hash<K>>
 class DeviationProvider {
   DECLARE_NON_COPYABLE(DeviationProvider)
@@ -33,9 +45,11 @@ class DeviationProvider {
   void setComputeValueByKey(const std::function<double(const K&)>& computeValueByKey);
 
  protected:
+  /** rief Recomputes the cached mean and deviation. Caller must hold m_mutex. */
   void update() const;
 
  private:
+  mutable QMutex m_mutex;
   std::function<double(const K&)> m_computeValueByKey;
   std::unordered_map<K, double, Hash> m_keyValueMap;
 
@@ -52,6 +66,8 @@ DeviationProvider<K, Hash>::DeviationProvider(const std::function<double(const K
 
 template <typename K, typename Hash>
 bool DeviationProvider<K, Hash>::isDeviant(const K& key, double coefficient, double threshold, bool defaultVal) const {
+  const QMutexLocker locker(&m_mutex);
+
   if (m_keyValueMap.find(key) == m_keyValueMap.end()) {
     return false;
   }
@@ -71,6 +87,8 @@ bool DeviationProvider<K, Hash>::isDeviant(const K& key, double coefficient, dou
 
 template <typename K, typename Hash>
 double DeviationProvider<K, Hash>::getDeviationValue(const K& key) const {
+  const QMutexLocker locker(&m_mutex);
+
   if (m_keyValueMap.find(key) == m_keyValueMap.end()) {
     return -1.0;
   }
@@ -89,20 +107,34 @@ double DeviationProvider<K, Hash>::getDeviationValue(const K& key) const {
 
 template <typename K, typename Hash>
 void DeviationProvider<K, Hash>::addOrUpdate(const K& key) {
-  m_needUpdate = true;
+  std::function<double(const K&)> computeValueByKey;
+  {
+    const QMutexLocker locker(&m_mutex);
+    computeValueByKey = m_computeValueByKey;
+  }
 
-  m_keyValueMap[key] = m_computeValueByKey(key);
+  // Invoked outside the lock on purpose: the callback reaches back into the
+  // owning Settings object, which holds its own mutex, so calling it while
+  // holding ours would invert the lock order its callers already establish.
+  const double value = computeValueByKey(key);
+
+  const QMutexLocker locker(&m_mutex);
+  m_needUpdate = true;
+  m_keyValueMap[key] = value;
 }
 
 template <typename K, typename Hash>
 void DeviationProvider<K, Hash>::addOrUpdate(const K& key, const double value) {
-  m_needUpdate = true;
+  const QMutexLocker locker(&m_mutex);
 
+  m_needUpdate = true;
   m_keyValueMap[key] = value;
 }
 
 template <typename K, typename Hash>
 void DeviationProvider<K, Hash>::remove(const K& key) {
+  const QMutexLocker locker(&m_mutex);
+
   m_needUpdate = true;
 
   if (m_keyValueMap.find(key) == m_keyValueMap.end()) {
@@ -147,11 +179,15 @@ void DeviationProvider<K, Hash>::update() const {
 
 template <typename K, typename Hash>
 void DeviationProvider<K, Hash>::setComputeValueByKey(const std::function<double(const K&)>& computeValueByKey) {
-  this->m_computeValueByKey = std::move(computeValueByKey);
+  const QMutexLocker locker(&m_mutex);
+
+  this->m_computeValueByKey = computeValueByKey;
 }
 
 template <typename K, typename Hash>
 void DeviationProvider<K, Hash>::clear() {
+  const QMutexLocker locker(&m_mutex);
+
   m_keyValueMap.clear();
 
   m_needUpdate = false;

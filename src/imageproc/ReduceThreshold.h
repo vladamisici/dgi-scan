@@ -5,6 +5,7 @@
 #define SCANTAILOR_IMAGEPROC_REDUCETHRESHOLD_H_
 
 #include "BinaryImage.h"
+#include <cmath>
 
 namespace imageproc {
 /**

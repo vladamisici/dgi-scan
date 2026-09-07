@@ -4,6 +4,7 @@
 #include "WorkerThreadPool.h"
 
 #include <QCoreApplication>
+#include <QDebug>
 #include <QThreadPool>
 #include <utility>
 
@@ -31,7 +32,15 @@ WorkerThreadPool::WorkerThreadPool(QObject* parent) : QObject(parent), m_pool(ne
 WorkerThreadPool::~WorkerThreadPool() = default;
 
 void WorkerThreadPool::shutdown() {
-  m_pool->waitForDone();
+  // Drop everything that has not started yet, then wait with a bound. The untimed
+  // wait used here before could park the GUI thread for as long as the slowest
+  // output-generation step took, during which the window stops repainting and
+  // Windows offers to kill the "not responding" application - turning an orderly
+  // close into exactly the abrupt termination we are trying to eliminate.
+  m_pool->clear();
+  if (!m_pool->waitForDone(15000)) {
+    qWarning() << "Worker thread pool did not finish within 15 seconds; shutting down anyway";
+  }
 }
 
 bool WorkerThreadPool::hasSpareCapacity() const {
@@ -57,6 +66,15 @@ void WorkerThreadPool::submitTask(const BackgroundTaskPtr& task) {
         }
       } catch (const std::bad_alloc&) {
         OutOfMemoryHandler::instance().handleOutOfMemorySituation();
+      } catch (const std::exception& e) {
+        // Until these two handlers existed, anything other than bad_alloc escaped
+        // QRunnable::run() and reached std::terminate, which kills the process
+        // outright - no dialog, no chance to save. Dropping one page's result
+        // costs that page a reprocess; letting the exception through cost the
+        // operator their entire session.
+        qCritical() << "Background task failed:" << e.what();
+      } catch (...) {
+        qCritical() << "Background task failed with an unknown exception";
       }
     }
 

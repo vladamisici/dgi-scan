@@ -13,6 +13,7 @@
 #include "DebugImages.h"
 #include "Despeckle.h"
 #include "TaskStatus.h"
+#include <stdexcept>
 
 using namespace imageproc;
 

@@ -30,6 +30,23 @@ if (NOT DEFAULT_COMPILER_FLAGS_IS_SET)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /D_SECURE_SCL=0")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /D_SECURE_SCL=0")
 
+    # Ship release builds with symbols in a separate .pdb. Without them a crash
+    # dump collected from an operator's machine is just a list of addresses, which
+    # is why field reports of silent terminations could never be diagnosed. /Zi
+    # emits the symbols; the /OPT flags restore the linker optimisations that
+    # /DEBUG would otherwise turn off, so the shipped code stays equivalent.
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /Zi")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Zi")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
+    set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
+
+    if (CMAKE_SIZEOF_VOID_P EQUAL 4)
+      # A 32-bit process is capped at 2 GB of address space unless it declares
+      # itself large-address-aware, even on 64-bit Windows. Large titles hit that
+      # ceiling, and the code already special-cases 32-bit in three places.
+      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /LARGEADDRESSAWARE")
+    endif()
+
     if (DEBUG_CLI)
       set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /DDEBUG_CLI")
       set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /DDEBUG_CLI")
@@ -42,6 +59,14 @@ if (NOT DEFAULT_COMPILER_FLAGS_IS_SET)
   if (CMAKE_COMPILER_IS_GNUCC AND CMAKE_COMPILER_IS_GNUCXX)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wpedantic -Werror=return-type -Wno-unused")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic -Werror=return-type -Wno-unused")
+
+    # Same reasoning as the MSVC branch: keep the optimisation level, add symbols.
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -g")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -g")
+
+    if (WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--large-address-aware")
+    endif()
   endif()
 
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}"
@@ -50,6 +75,15 @@ if (NOT DEFAULT_COMPILER_FLAGS_IS_SET)
       CACHE STRING "Common C++ flags for all build configurations." FORCE)
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}"
       CACHE STRING "Common link flags for all build configurations." FORCE)
+
+  set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}"
+      CACHE STRING "C flags for release builds." FORCE)
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}"
+      CACHE STRING "C++ flags for release builds." FORCE)
+  set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE}"
+      CACHE STRING "Link flags for release builds." FORCE)
+  set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE}"
+      CACHE STRING "Shared-library link flags for release builds." FORCE)
 
   set(DEFAULT_COMPILER_FLAGS_IS_SET YES CACHE INTERNAL "" FORCE)
 endif()
@@ -163,6 +197,8 @@ endif()
 
 #================================= Boost ================================#
 
+option(BUILD_TESTING "Build the unit test suites." ON)
+
 if (WIN32)
   if (MINGW)
     if (CMAKE_SIZEOF_VOID_P EQUAL 8)
@@ -185,19 +221,34 @@ if (WIN32)
       HINTS ${boost_include_dir_hints}
       DOC "Boost include directory.")
 
-  set(Boost_USE_STATIC_LIBS ON)
+  # An option rather than a hard set, so a package manager that only ships
+  # shared Boost (vcpkg's x64-windows triplet, for one) can be used with
+  # -DBoost_USE_STATIC_LIBS=OFF instead of failing to configure.
+  option(Boost_USE_STATIC_LIBS "Link Boost statically." ON)
 endif()
 set(Boost_USE_MULTITHREADED ON)
 
-find_package(Boost 1.60 COMPONENTS unit_test_framework prg_exec_monitor REQUIRED)
+# The application itself uses only header-only Boost - multi_index, lambda, bind,
+# intrusive, iterator. unit_test_framework is needed purely by the test
+# executables, so requiring it here blocked the GUI build on a test-only
+# dependency.
+find_package(Boost 1.60 REQUIRED)
 
 include_directories(${Boost_INCLUDE_DIRS})
 add_definitions(-DBOOST_MULTI_INDEX_DISABLE_SERIALIZATION)
-if (NOT Boost_USE_STATIC_LIBS)
-  if (WIN32)
-    add_dynamic_library_locations(Boost::unit_test_framework Boost::prg_exec_monitor)
+
+if (BUILD_TESTING)
+  # prg_exec_monitor is deliberately not requested: the suites use
+  # BOOST_AUTO_TEST_MAIN, which unit_test_framework provides on its own. Asking
+  # for it only added a component that some Boost packages (vcpkg's among them)
+  # ship incompletely, which failed the configure step outright.
+  find_package(Boost 1.60 COMPONENTS unit_test_framework REQUIRED)
+  if (NOT Boost_USE_STATIC_LIBS)
+    if (WIN32)
+      add_dynamic_library_locations(Boost::unit_test_framework)
+    endif()
+    add_definitions(-DBOOST_TEST_DYN_LINK)
   endif()
-  add_definitions(-DBOOST_TEST_DYN_LINK)
 endif()
 
 #=================================== Qt ===================================#
@@ -231,7 +282,9 @@ if (WIN32 AND MSVC)
   add_definitions(-DNOMINMAX)
 endif()
 
-enable_testing()
+if (BUILD_TESTING)
+  enable_testing()
+endif()
 
 # Prepare config.h
 option(PORTABLE_VERSION "Whether to build the portable version." ON)

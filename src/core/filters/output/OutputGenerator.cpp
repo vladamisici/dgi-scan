@@ -4,6 +4,7 @@
 #include "OutputGenerator.h"
 
 #include <AdjustBrightness.h>
+#include <BadAllocIfNull.h>
 #include <Binarize.h>
 #include <BlackOnWhiteEstimator.h>
 #include <ConnCompEraser.h>
@@ -49,6 +50,7 @@
 #include <boost/bind.hpp>
 #include <boost/function.hpp>
 #include <cmath>
+#include <stdexcept>
 
 #include "ColorParams.h"
 #include "DebugImages.h"
@@ -542,7 +544,12 @@ void fillMarginsInPlace(QImage& image,
   assert(image.format() == QImage::Format_RGB32 || image.format() == QImage::Format_ARGB32);
 
   const QImage::Format imageFormat = image.format();
-  image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+  // Qt signals an allocation failure in convertToFormat() by returning a null
+  // image rather than throwing, so without this the failure is silent: QPainter
+  // refuses to work on the null image, the conversion back below leaves it null
+  // too, and a blank page is written to disk as if nothing was wrong. Turning it
+  // into bad_alloc routes it to the existing out-of-memory handling.
+  image = badAllocIfNull(image.convertToFormat(QImage::Format_ARGB32_Premultiplied));
   {
     QPainter painter(&image);
     painter.setRenderHint(QPainter::Antialiasing, antialiasing);
@@ -556,7 +563,7 @@ void fillMarginsInPlace(QImage& image,
 
     painter.drawPath(outerPath.subtracted(innerPath));
   }
-  image = image.convertToFormat(imageFormat);
+  image = badAllocIfNull(image.convertToFormat(imageFormat));
 }
 
 void fillMarginsInPlace(BinaryImage& image, const QPolygonF& contentPoly, const BWColor color) {
@@ -621,7 +628,8 @@ void applyFillZonesInPlace(QImage& img,
     return;
   }
 
-  QImage canvas(img.convertToFormat(QImage::Format_ARGB32_Premultiplied));
+  // See the note in the function above on Qt's null-on-failure behaviour.
+  QImage canvas(badAllocIfNull(img.convertToFormat(QImage::Format_ARGB32_Premultiplied)));
   {
     QPainter painter(&canvas);
     painter.setRenderHint(QPainter::Antialiasing, antialiasing);
@@ -636,9 +644,9 @@ void applyFillZonesInPlace(QImage& img,
   }
 
   if ((img.format() == QImage::Format_Indexed8) && img.isGrayscale()) {
-    img = toGrayscale(canvas);
+    img = badAllocIfNull(toGrayscale(canvas));
   } else {
-    img = canvas.convertToFormat(img.format());
+    img = badAllocIfNull(canvas.convertToFormat(img.format()));
   }
 }
 
@@ -1156,6 +1164,14 @@ std::unique_ptr<OutputImage> OutputGenerator::Processor::buildEmptyImage() const
   BinaryImage emptyImage(m_targetSize, WHITE);
   imageBuilder.setImage(emptyImage.toQImage());
   if (m_renderParams.splitOutput()) {
+    // The foreground type is what makes OutputImageBuilder::build() produce an
+    // OutputImageWithForegroundMask rather than an OutputImagePlain. Omitting it
+    // here - while the ordinary output path sets it - meant a blank page in
+    // split-output mode silently produced a plain image, which output::Task then
+    // dynamic_cast<OutputImageWithForeground*> to null and dereferenced. Blank
+    // pages, inside covers and separator sheets are routine in book scanning, so
+    // this crashed the application mid-run on perfectly normal titles.
+    imageBuilder.setForegroundType(getForegroundType());
     imageBuilder.setForegroundMask(emptyImage);
     if (m_renderParams.originalBackground()) {
       imageBuilder.setBackgroundMask(emptyImage);
@@ -1283,6 +1299,10 @@ std::unique_ptr<OutputImage> OutputGenerator::Processor::processWithoutDewarping
         if (maybeNormalized.format() == QImage::Format_Indexed8) {
           colorImage.setColorTable(maybeNormalized.colorTable());
         }
+        // Both the constructor and setColorTable() can leave the image null on
+        // an allocation failure - the same guard the dst image below already
+        // carries. Without it, fill() and drawOver() run against nothing.
+        badAllocIfNull(colorImage);
         colorImage.fill(Qt::white);
         drawOver(colorImage, m_croppedContentRect, maybeNormalized, m_contentRectInWorkingCs);
         maybeNormalized = QImage();

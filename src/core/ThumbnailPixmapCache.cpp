@@ -432,20 +432,24 @@ ThumbnailPixmapCache::Status ThumbnailPixmapCache::Impl::request(
 }  // ThumbnailPixmapCache::Impl::request
 
 void ThumbnailPixmapCache::Impl::ensureThumbnailExists(const ImageId& imageId, const QImage& image) {
-  if (m_shuttingDown) {
-    return;
-  }
-
   if (image.isNull()) {
     return;
   }
 
   QMutexLocker locker(&m_mutex);
+  // m_shuttingDown is written by the GUI thread and read here from a worker, so
+  // it has to be read under the same mutex as the other members.
+  if (m_shuttingDown) {
+    return;
+  }
   const QString thumbDir(m_thumbDir);
   const QSize maxThumbSize(m_maxThumbSize);
   locker.unlock();
 
-  const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, m_maxThumbSize));
+  // The local copy, not the member: the member can change under us between here
+  // and makeThumbnail() below, which would name the file after one size and
+  // store an image scaled to another.
+  const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, maxThumbSize));
   if (QFile::exists(thumbFilePath)) {
     return;
   }
@@ -460,20 +464,20 @@ void ThumbnailPixmapCache::Impl::ensureThumbnailExists(const ImageId& imageId, c
 }
 
 void ThumbnailPixmapCache::Impl::recreateThumbnail(const ImageId& imageId, const QImage& image) {
-  if (m_shuttingDown) {
-    return;
-  }
-
   if (image.isNull()) {
     return;
   }
 
   QMutexLocker locker(&m_mutex);
+  if (m_shuttingDown) {
+    return;
+  }
   const QString thumbDir(m_thumbDir);
   const QSize maxThumbSize(m_maxThumbSize);
   locker.unlock();
 
-  const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, m_maxThumbSize));
+  // See the note in ensureThumbnailExists() on using the local copy here.
+  const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, maxThumbSize));
   const QImage thumbnail(makeThumbnail(image, maxThumbSize));
   bool thumbWritten = false;
 
@@ -583,6 +587,20 @@ void ThumbnailPixmapCache::Impl::backgroundProcessing() {
       postLoadResult(lqIt, image, status);
     } catch (const std::bad_alloc&) {
       OutOfMemoryHandler::instance().handleOutOfMemorySituation();
+      // Leaving the loop rather than continuing it: an allocation that failed
+      // once is likely to fail again immediately, and retrying would spin this
+      // thread against an exhausted heap exactly while the GUI thread is trying
+      // to allocate the rescue dialog. run() falls through to exec() afterwards,
+      // so the thread stays alive and resumes when new work is queued.
+      break;
+    } catch (const std::exception& e) {
+      // A truncated TIFF or a share that disappears mid-read makes the loaders
+      // throw; that used to terminate the process from this thread.
+      qCritical() << "Thumbnail loading failed:" << e.what();
+      break;
+    } catch (...) {
+      qCritical() << "Thumbnail loading failed with an unknown exception";
+      break;
     }
   }
 }  // ThumbnailPixmapCache::Impl::backgroundProcessing
