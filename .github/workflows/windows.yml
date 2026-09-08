@@ -27,7 +27,6 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2019_64
-          modules: qtsvg
           cache: true
 
       # Only the small libraries. Qt comes prebuilt above, which keeps the job to
@@ -70,6 +69,8 @@ jobs:
 
       - name: Package
         run: |
+          # NSIS is on the runner image but not on PATH.
+          $env:PATH += ";${env:ProgramFiles(x86)}\NSIS"
           cd build
           cpack -G ZIP -C $env:BUILD_TYPE
           cpack -G ZIP -C $env:BUILD_TYPE `
