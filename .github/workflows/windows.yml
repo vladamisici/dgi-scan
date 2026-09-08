@@ -76,7 +76,13 @@ jobs:
           cpack -G ZIP -C $env:BUILD_TYPE `
             -D CPACK_COMPONENTS_ALL=symbols `
             -D CPACK_ARCHIVE_COMPONENT_INSTALL=ON `
-            -D CPACK_PACKAGE_FILE_NAME=scantailor-dgi-symbols
+            -D CPACK_PACKAGE_FILE_NAME=symbols-tmp
+          # CPack appends the component name, so the file lands as
+          # "symbols-tmp-symbols.zip". Rename it to match the application
+          # archive, so the two are recognisably the same build.
+          $main = Get-ChildItem scantailor-dgi-*-win64.zip | Select-Object -First 1
+          $base = $main.Name -replace '\.zip$',''
+          Move-Item -Force symbols-tmp-symbols.zip "$base-symbols.zip"
           cd ../build-installer
           cpack -G NSIS -C $env:BUILD_TYPE
 
@@ -152,7 +158,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: scantailor-dgi-symbols
-          path: build/scantailor-dgi-symbols*.zip
+          path: build/scantailor-dgi-*-win64-symbols.zip
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -161,4 +167,4 @@ jobs:
           files: |
             build-installer/scantailor-dgi-*-win64.exe
             build/scantailor-dgi-*-win64.zip
-            build/scantailor-dgi-symbols*.zip
+            build/scantailor-dgi-*-win64-symbols.zip
