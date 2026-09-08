@@ -12,7 +12,7 @@ if (POLICY CMP0071)
   cmake_policy(SET CMP0071 NEW)
 endif()
 
-project("ScanTailor Advanced")
+project("Scantailor-DGI")
 
 # Set compiler flags.
 set(CMAKE_CXX_STANDARD 17)
@@ -303,7 +303,11 @@ option(PORTABLE_VERSION "Whether to build the portable version." ON)
 if (PORTABLE_VERSION)
   set(PORTABLE_CONFIG_DIR "config")
 endif()
-set(APPLICATION_NAME "scantailor-advanced")
+# The identifier used for settings, install paths and package file names.
+set(APPLICATION_NAME "scantailor-dgi")
+# The name shown to people: window title, About box, installer, Start menu.
+set(APPLICATION_DISPLAY_NAME "Scantailor-DGI")
+set(APPLICATION_VENDOR "DGI")
 if (WIN32)
   set(TRANSLATION_DIRS ".:translations")
   set(PLUGIN_DIRS ".")
@@ -483,26 +487,62 @@ endif()
 
 # Packaging
 set(CPACK_PACKAGE_NAME "${APPLICATION_NAME}")
+set(APPLICATION_URL "https://github.com/vladamisici/dgi-scan")
 set(CPACK_PACKAGE_VERSION_MAJOR "${APPLICATION_VERSION_MAJOR}")
 set(CPACK_PACKAGE_VERSION_MINOR "${APPLICATION_VERSION_MINOR}")
 set(CPACK_PACKAGE_VERSION_PATCH "${APPLICATION_VERSION_PATCH}")
-set(CPACK_PACKAGE_VENDOR "4lex4 <4lex49@zoho.com>")
+set(CPACK_PACKAGE_VENDOR "${APPLICATION_VENDOR}")
 set(CPACK_PACKAGE_CONTACT "${CPACK_PACKAGE_VENDOR}")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Interactive post-processing tool for scanned pages.")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
-set(CPACK_PACKAGE_EXECUTABLES "scantailor;${CMAKE_PROJECT_NAME}")
+set(CPACK_PACKAGE_EXECUTABLES "scantailor;${APPLICATION_DISPLAY_NAME}")
 set(CPACK_CREATE_DESKTOP_LINKS "scantailor")
 if (WIN32)
+  set(CPACK_NSIS_PACKAGE_NAME "${APPLICATION_DISPLAY_NAME}")
+  set(CPACK_NSIS_DISPLAY_NAME "${APPLICATION_DISPLAY_NAME} ${VERSION}")
+  set(CPACK_PACKAGE_INSTALL_DIRECTORY "${APPLICATION_DISPLAY_NAME}")
   set(CPACK_NSIS_INSTALLED_ICON_NAME "scantailor.exe")
-  set(CPACK_NSIS_PACKAGE_NAME "${CMAKE_PROJECT_NAME}")
-  set(CPACK_NSIS_DISPLAY_NAME "${CMAKE_PROJECT_NAME} ${VERSION}")
   set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
-  set(CPACK_NSIS_EXECUTABLES_DIRECTORY "${CMAKE_BINARY_DIR}")
-  set(CPACK_PACKAGE_INSTALL_DIRECTORY "${CMAKE_PROJECT_NAME}")
-  set(CPACK_NSIS_CREATE_ICONS_EXTRA
-      "CreateShortCut \\\"$DESKTOP\\\\${CMAKE_PROJECT_NAME}.lnk\\\" \\\"$INSTDIR\\\\scantailor.exe\\\"")
-  set(CPACK_NSIS_DELETE_ICONS_EXTRA
-      "Delete \\\"$DESKTOP\\\\${CMAKE_PROJECT_NAME}.lnk\\\"")
+
+  # Relative to the installation directory. This was previously the build tree,
+  # which produced Start Menu shortcuts pointing at a path that exists only on
+  # the machine the installer was built on.
+  set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
+
+  set(CPACK_NSIS_MUI_ICON "${SCANTAILOR_RESOURCES_DIR}/win32/scantailor.ico")
+  set(CPACK_NSIS_MUI_UNIICON "${SCANTAILOR_RESOURCES_DIR}/win32/scantailor.ico")
+  set(CPACK_NSIS_CONTACT "${CPACK_PACKAGE_CONTACT}")
+  set(CPACK_NSIS_URL_INFO_ABOUT "${APPLICATION_URL}")
+  set(CPACK_NSIS_HELP_LINK "${APPLICATION_URL}")
+
+  # Bracket arguments below: the NSIS script is passed through verbatim, so the
+  # backslashes and quotes it needs survive without a layer of CMake escaping.
+  # These values make a round trip through CPackConfig.cmake, which CMake parses
+  # again, so every backslash has to be doubled and every quote escaped here to
+  # arrive in the generated NSIS script as a single character.
+  set(CPACK_NSIS_CREATE_ICONS_EXTRA [==[
+    CreateShortCut '$DESKTOP\\Scantailor-DGI.lnk' '$INSTDIR\\scantailor.exe'
+  ]==])
+  set(CPACK_NSIS_DELETE_ICONS_EXTRA [==[
+    Delete '$DESKTOP\\Scantailor-DGI.lnk'
+  ]==])
+
+  # Associate project files so an operator can open a title by double-clicking
+  # it. SHCTX follows the install scope, so a per-machine install registers for
+  # every user and a per-user install only for that one. $\" is the NSIS escape
+  # for a literal quote, needed around a path that may contain spaces.
+  set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS [==[
+    WriteRegStr SHCTX 'Software\\Classes\\.ScanTailor' '' 'ScantailorDGI.Project'
+    WriteRegStr SHCTX 'Software\\Classes\\ScantailorDGI.Project' '' 'Scantailor-DGI Project'
+    WriteRegStr SHCTX 'Software\\Classes\\ScantailorDGI.Project\\DefaultIcon' '' '$INSTDIR\\scantailor.exe,0'
+    WriteRegStr SHCTX 'Software\\Classes\\ScantailorDGI.Project\\shell\\open\\command' '' '$\\\"$INSTDIR\\scantailor.exe$\\\" $\\\"%1$\\\"'
+    System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+  ]==])
+  set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS [==[
+    DeleteRegKey SHCTX 'Software\\Classes\\ScantailorDGI.Project'
+    DeleteRegKey SHCTX 'Software\\Classes\\.ScanTailor'
+    System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+  ]==])
 endif()
 set(CPACK_SOURCE_PACKAGE_FILE_NAME "${APPLICATION_NAME}-${VERSION}")
 set(CPACK_SOURCE_IGNORE_FILES

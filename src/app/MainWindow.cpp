@@ -3,6 +3,8 @@
 
 #include "MainWindow.h"
 
+#include <config.h>
+
 #include <core/ApplicationSettings.h>
 #include <core/CrashHandler.h>
 #include <core/IconProvider.h>
@@ -1942,7 +1944,9 @@ void MainWindow::updateWindowTitle() {
     projectName = QFileInfo(m_projectFile).completeBaseName();
   }
   const QString version(QString::fromUtf8(VERSION));
-  setWindowTitle(tr("%2 - ScanTailor Advanced [%1bit]").arg(sizeof(void*) * 8).arg(projectName));
+  setWindowTitle(tr("%1 - %2 [%3bit]")
+                     .arg(projectName, QString::fromUtf8(APPLICATION_DISPLAY_NAME))
+                     .arg(sizeof(void*) * 8));
 }
 
 /**

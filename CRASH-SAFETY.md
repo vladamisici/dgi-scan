@@ -1,4 +1,4 @@
-# Crash safety, autosave and memory
+# Scantailor-DGI — crash safety, autosave and memory
 
 This fork adds crash diagnostics, real autosave and crash recovery, and cuts the
 memory ScanTailor uses on large titles. No image-processing behaviour is
@@ -75,8 +75,15 @@ four-thread machine that is most of a gigabyte of pure waste.
 
 ### Crashes leave evidence
 
-`CrashHandler` is installed before anything else happens and writes to
-`<config>/crashes/` (portable install) or `%LOCALAPPDATA%\scantailor-advanced\crashes\`:
+`CrashHandler` is installed before anything else happens. Where it writes
+depends on how the application was deployed:
+
+| Deployment | Crash reports and log |
+| --- | --- |
+| Installer | `%LOCALAPPDATA%\scantailor-dgi\scantailor-dgi\crashes\` |
+| Portable ZIP | `config\crashes\` beside the executable |
+
+Either way that directory contains:
 
 - `scantailor.log` — timestamped log of every `qDebug`/`qWarning`/`qCritical`,
   which previously went nowhere, plus start-up and project-open records.
@@ -156,6 +163,24 @@ For titles already damaged, in order:
 Send a pilot batch back through the new build before returning all of them, and
 keep an eye on the crash folder — the whole point of the logging is that the next
 failure is diagnosable rather than invisible.
+
+## Distribution
+
+Three artifacts are produced, and the split matters:
+
+| Artifact | Goes to | Notes |
+| --- | --- | --- |
+| `scantailor-dgi-<version>-win64.exe` | operators | Installer. Needs administrator rights; deployable unattended with `/S`. Registers `.ScanTailor` files, creates Start menu and desktop shortcuts. |
+| `scantailor-dgi-<version>-win64.zip` | operators without admin rights | Portable. Unzip and run; settings and crash reports stay in the folder. |
+| `scantailor-dgi-symbols.zip` | whoever supports the deployment | Never ship this to operators. |
+
+**Keep one copy of the symbols archive per release.** A crash dump is
+unreadable without the `.pdb` built from that exact commit, and pairing them
+up afterwards is what turns "it closed again" into a stack trace.
+
+The installer is per-machine, so it goes through the usual fleet tooling:
+`scantailor-dgi-<version>-win64.exe /S` installs unattended, and
+`"%ProgramFiles%\Scantailor-DGI\Uninstall.exe" /S` removes it.
 
 ## Building
 

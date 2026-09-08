@@ -1,3 +1,19 @@
+Scantailor-DGI
+==============
+
+A fork of [ScanTailor Advanced](https://github.com/4lex4/scantailor-advanced)
+maintained for DGI's scanning workflow. It is the upstream application plus the
+crash-safety, autosave and memory work described in
+[CRASH-SAFETY.md](CRASH-SAFETY.md). The image processing itself is unchanged.
+
+Downloads are on the [releases page](https://github.com/vladamisici/dgi-scan/releases):
+the installer for normal use, the portable ZIP where administrator rights are
+not available.
+
+The upstream documentation follows.
+
+---
+
 ScanTailor Advanced
 ===================
 

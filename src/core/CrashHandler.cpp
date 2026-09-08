@@ -3,6 +3,8 @@
 
 #include "CrashHandler.h"
 
+#include <config.h>
+
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -70,7 +72,7 @@ void appendCrashNote(const wchar_t* stemPath, const char* reason, const void* ad
   // reason and fault address, leaving a zero-byte file.
   wchar_t noteW[2048];
   const int wlen = _snwprintf(noteW, (sizeof(noteW) / sizeof(noteW[0])) - 1,
-                              L"ScanTailor Advanced crash report\r\n"
+                              L"%S crash report\r\n"
                               L"time      : %04u-%02u-%02u %02u:%02u:%02u\r\n"
                               L"reason    : %S\r\n"
                               L"code      : 0x%08lx\r\n"
@@ -78,7 +80,8 @@ void appendCrashNote(const wchar_t* stemPath, const char* reason, const void* ad
                               L"process   : %lu (%u-bit)\r\n"
                               L"thread    : %lu\r\n"
                               L"project   : %s\r\n",
-                              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, reason, code, address,
+                              APPLICATION_DISPLAY_NAME, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute,
+                              st.wSecond, reason, code, address,
                               ::GetCurrentProcessId(), static_cast<unsigned>(sizeof(void*) * 8),
                               ::GetCurrentThreadId(), g_projectFileW[0] ? g_projectFileW : L"<none>");
   // A negative return means truncation, not "produce nothing": write whatever
@@ -399,7 +402,8 @@ void CrashHandler::install(const QString& reportDir) {
   g_previousMessageHandler = qInstallMessageHandler(&messageHandler);
   g_installed = true;
 
-  log(QString::fromLatin1("--- ScanTailor Advanced started (pid %1, %2-bit) ---")
+  log(QString::fromLatin1("--- %1 started (pid %2, %3-bit) ---")
+          .arg(QString::fromUtf8(APPLICATION_DISPLAY_NAME))
           .arg(QCoreApplication::applicationPid())
           .arg(sizeof(void*) * 8));
 }
