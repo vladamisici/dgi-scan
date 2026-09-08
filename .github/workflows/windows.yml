@@ -83,8 +83,14 @@ jobs:
       # A package that starts and then dies before showing a window is the exact
       # failure this repository shipped once: the build tree ran fine because the
       # package manager had deployed the transitive DLLs next to the binary, while
-      # the package itself was missing fourteen of them. Unpacking and launching
-      # the real artifact is the only check that catches it.
+      # the package itself was missing fourteen of them. Only launching the real
+      # artifact catches it.
+      #
+      # The proof of success is the crash-handler log rather than a window: it is
+      # written from main() once every DLL has loaded and Qt is up, so it says
+      # exactly what we need to know, and unlike a window it does not depend on
+      # the runner having an interactive desktop. A process blocked on a missing
+      # DLL never reaches that line.
       - name: Smoke test the portable package
         shell: pwsh
         run: |
@@ -92,18 +98,19 @@ jobs:
           Expand-Archive -Path $zip.FullName -DestinationPath smoke
           $dir = (Get-ChildItem smoke -Directory | Select-Object -First 1).FullName
           $p = Start-Process -FilePath "$dir/scantailor.exe" -WorkingDirectory $dir -PassThru
-          Start-Sleep -Seconds 20
-          if ($p.HasExited) { throw "scantailor.exe exited with $($p.ExitCode)" }
-          $p.Refresh()
-          $mb = [math]::Round($p.WorkingSet64 / 1MB, 1)
-          Write-Host "portable: $mb MB, title '$($p.MainWindowTitle)'"
-          # A process blocked on a missing DLL sits at a few MB with no window.
-          if ($mb -lt 20) { throw "started but never initialised ($mb MB) - probably a missing dependency" }
-          if (-not $p.MainWindowTitle) { throw "no main window appeared" }
-          Stop-Process -Id $p.Id -Force
+          Start-Sleep -Seconds 25
+          $log = Join-Path $dir "config/crashes/scantailor.log"
+          if (-not (Test-Path $log)) {
+            if ($p.HasExited) { throw "portable build exited with $($p.ExitCode) and wrote no log" }
+            throw "portable build never got through start-up - almost certainly a missing dependency"
+          }
+          Get-Content $log | Write-Host
+          if (-not (Select-String -Path $log -Pattern "started" -Quiet)) { throw "start-up line missing from log" }
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          Write-Host "portable package OK"
 
       # The runner is administrator, so the installer can be exercised for real:
-      # install silently, launch what it installed, then uninstall.
+      # install silently, run what it installed, check the association, remove it.
       - name: Smoke test the installer
         shell: pwsh
         run: |
@@ -111,18 +118,26 @@ jobs:
           Start-Process -FilePath $exe.FullName -ArgumentList "/S" -Wait
           $installed = "$env:ProgramFiles\Scantailor-DGI\scantailor.exe"
           if (-not (Test-Path $installed)) { throw "installer did not place $installed" }
+
+          $log = "$env:LOCALAPPDATA\scantailor-dgi\scantailor-dgi\crashes\scantailor.log"
+          Remove-Item $log -ErrorAction SilentlyContinue
           $p = Start-Process -FilePath $installed -PassThru
-          Start-Sleep -Seconds 20
-          if ($p.HasExited) { throw "installed build exited with $($p.ExitCode)" }
-          $p.Refresh()
-          $mb = [math]::Round($p.WorkingSet64 / 1MB, 1)
-          Write-Host "installed: $mb MB, title '$($p.MainWindowTitle)'"
-          if ($mb -lt 20) { throw "installed build never initialised ($mb MB)" }
-          Stop-Process -Id $p.Id -Force
+          Start-Sleep -Seconds 25
+          if (-not (Test-Path $log)) {
+            if ($p.HasExited) { throw "installed build exited with $($p.ExitCode) and wrote no log" }
+            throw "installed build never got through start-up"
+          }
+          Get-Content $log | Write-Host
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+
           $assoc = (Get-ItemProperty "HKLM:\Software\Classes\.ScanTailor" -ErrorAction SilentlyContinue).'(default)'
-          Write-Host "file association: $assoc"
+          if ($assoc -ne "ScantailorDGI.Project") { throw "file association not registered (got '$assoc')" }
+          Write-Host "installer OK, association: $assoc"
+
           Start-Process -FilePath "$env:ProgramFiles\Scantailor-DGI\Uninstall.exe" -ArgumentList "/S" -Wait
           Start-Sleep -Seconds 5
+          if (Test-Path $installed) { throw "uninstaller left $installed behind" }
+          Write-Host "uninstall OK"
 
       - uses: actions/upload-artifact@v4
         with:
