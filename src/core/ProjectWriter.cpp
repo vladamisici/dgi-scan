@@ -110,21 +110,14 @@ bool ProjectWriter::write(const QString& filePath,
     return false;
   };
 
-  AtomicFileOverwriter overwriter;
-  QIODevice* const device = overwriter.startWriting(filePath);
-  if (!device) {
-    // The atomic write needs permission to create a file in the project's
-    // folder. A share can withhold exactly that while still allowing an
-    // existing file to be modified, and on such a folder the operator would be
-    // unable to save at all - a certain loss of their work, to avoid a risked
-    // one. So fall back to writing in place, which is what the application
-    // always did before, and record loudly that the protection is off for this
-    // save.
-    const QString atomicFailure = overwriter.errorString();
+  // Writing over the target directly. This is what the application always did,
+  // and it carries the risk the atomic write exists to remove - an interruption
+  // leaves a truncated project - so it is only used when the atomic write could
+  // not be completed and the target is known to be untouched.
+  const auto writeInPlace = [&](const QString& why) -> bool {
     QFile file(filePath);
     if (!file.open(QIODevice::WriteOnly)) {
-      return fail(QObject::tr("%1; and writing directly to it failed too (%2)")
-                      .arg(atomicFailure, file.errorString()));
+      return fail(QObject::tr("%1; and writing to it directly failed too (%2)").arg(why, file.errorString()));
     }
     {
       QTextStream strm(&file);
@@ -139,10 +132,21 @@ bool ProjectWriter::write(const QString& filePath,
     }
     file.close();
     core::CrashHandler::log(QLatin1String("Wrote \"") + filePath
-                            + QLatin1String("\" in place, without the usual protection against an interrupted "
-                                            "save, because ")
-                            + atomicFailure);
+                            + QLatin1String("\" in place, without the usual protection against an interrupted save, "
+                                            "because ")
+                            + why);
     return true;
+  };
+
+  AtomicFileOverwriter overwriter;
+  QIODevice* const device = overwriter.startWriting(filePath);
+  if (!device) {
+    // The atomic write needs permission to create a file in the project's
+    // folder. A share can withhold exactly that while still allowing an
+    // existing file to be modified, and on such a folder the operator would
+    // otherwise be unable to save at all - a certain loss of their work to
+    // avoid a risked one.
+    return writeInPlace(overwriter.errorString());
   }
 
   {
@@ -155,6 +159,16 @@ bool ProjectWriter::write(const QString& filePath,
     }
   }
   if (!overwriter.commit()) {
+    // Replacing the target needs the right to delete the file being displaced,
+    // which overwriting it in place never needed - a share, or a retention
+    // agent, can grant one and refuse the other. The data was written
+    // successfully, so retrying directly over the target is sound. A failure at
+    // the writing stage is deliberately not retried this way: the data could not
+    // be written once already, and truncating a good project to try again would
+    // risk destroying it.
+    if (overwriter.failureStage() == AtomicFileOverwriter::FailureStage::Replace) {
+      return writeInPlace(overwriter.errorString());
+    }
     return fail(overwriter.errorString());
   }
   return true;

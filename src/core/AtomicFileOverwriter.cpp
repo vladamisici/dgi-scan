@@ -82,6 +82,7 @@ AtomicFileOverwriter::~AtomicFileOverwriter() {
 QIODevice* AtomicFileOverwriter::startWriting(const QString& filePath) {
   abort();
   m_errorString.clear();
+  m_failureStage = FailureStage::None;
 
   m_tempFile = std::make_unique<QTemporaryFile>(filePath);
   m_tempFile->setAutoRemove(false);
@@ -93,6 +94,7 @@ QIODevice* AtomicFileOverwriter::startWriting(const QString& filePath) {
     m_errorString = QObject::tr("could not create a temporary file next to \"%1\" (%2); "
                                 "saving this way needs permission to create files in that folder")
                         .arg(filePath, m_tempFile->errorString());
+    m_failureStage = FailureStage::Create;
     m_tempFile.reset();
   }
   return m_tempFile.get();
@@ -101,9 +103,11 @@ QIODevice* AtomicFileOverwriter::startWriting(const QString& filePath) {
 bool AtomicFileOverwriter::commit() {
   if (!m_tempFile) {
     m_errorString = QObject::tr("nothing was being written");
+    m_failureStage = FailureStage::Write;
     return false;
   }
   m_errorString.clear();
+  m_failureStage = FailureStage::None;
 
   const QString tempFilePath(m_tempFile->fileName());
   const QString targetPath(m_tempFile->fileTemplate());
@@ -114,6 +118,7 @@ bool AtomicFileOverwriter::commit() {
   bool written = m_tempFile->flush() && (m_tempFile->error() == QFileDevice::NoError);
   if (!written) {
     m_errorString = QObject::tr("could not write \"%1\" (%2)").arg(tempFilePath, m_tempFile->errorString());
+    m_failureStage = FailureStage::Write;
   }
   if (written) {
     switch (syncToDisk(*m_tempFile)) {
@@ -129,6 +134,7 @@ bool AtomicFileOverwriter::commit() {
         // atomic write exists to prevent.
         m_errorString = QObject::tr("could not flush \"%1\" to disk (%2)")
                             .arg(tempFilePath, Utils::lastSystemErrorString());
+        m_failureStage = FailureStage::Write;
         qCritical() << "Failed to flush" << tempFilePath << "to disk; the save is being abandoned";
         written = false;
         break;
@@ -145,9 +151,11 @@ bool AtomicFileOverwriter::commit() {
     return false;
   }
 
-  if (!Utils::overwritingRename(tempFilePath, targetPath)) {
-    m_errorString = QObject::tr("could not replace \"%1\" with the file just written (%2)")
-                        .arg(targetPath, Utils::lastSystemErrorString());
+  QString renameError;
+  if (!Utils::overwritingRename(tempFilePath, targetPath, &renameError)) {
+    m_errorString
+        = QObject::tr("could not replace \"%1\" with the file just written (%2)").arg(targetPath, renameError);
+    m_failureStage = FailureStage::Replace;
     QFile::remove(tempFilePath);
     return false;
   }

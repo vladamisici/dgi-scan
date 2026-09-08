@@ -52,11 +52,25 @@ void NewOpenProjectPanel::populateHistory() {
     m_clearHistoryLabel = nullptr;
   }
 
+  recentProjectsGroup->setVisible(true);
+
   if (m_history.isEmpty()) {
-    recentProjectsGroup->setVisible(false);
+    // Shown rather than hidden. An empty section that disappears entirely gives
+    // no sign the history exists at all, which reads as the feature being
+    // missing rather than as there being nothing in it yet.
+    auto* empty = new QLabel(recentProjectsGroup);
+    empty->setTextFormat(Qt::PlainText);
+    empty->setText(tr("Projects you open will be listed here."));
+    QFont emptyFont = empty->font();
+    emptyFont.setPointSize(std::max(1, recentProjectsGroup->font().pointSize() - 5));
+    empty->setFont(emptyFont);
+    QPalette emptyPalette = empty->palette();
+    emptyPalette.setColor(QPalette::WindowText, secondaryTextColor(palette()));
+    empty->setPalette(emptyPalette);
+    recentProjectsGroup->layout()->addWidget(empty);
+    m_historyRows.push_back(empty);
     return;
   }
-  recentProjectsGroup->setVisible(true);
 
   for (const ProjectHistory::Entry& entry : m_history.entries()) {
     addHistoryEntry(entry);

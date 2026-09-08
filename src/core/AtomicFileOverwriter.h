@@ -66,9 +66,28 @@ class AtomicFileOverwriter {
    */
   const QString& errorString() const { return m_errorString; }
 
+  /**
+   * \brief Which step failed.
+   *
+   * The distinction matters to callers deciding whether to retry by writing
+   * over the target directly. After Create or Replace the target is untouched
+   * and such a retry is reasonable. After Write it is not: the data could not
+   * be written once already, and truncating the target to try again risks
+   * destroying a good file to produce a broken one.
+   */
+  enum class FailureStage {
+    None,     /**< Nothing has failed. */
+    Create,   /**< The temporary file could not be created. */
+    Write,    /**< The data could not be written or flushed. */
+    Replace   /**< The data is written, but the target could not be replaced. */
+  };
+
+  FailureStage failureStage() const { return m_failureStage; }
+
  private:
   std::unique_ptr<QTemporaryFile> m_tempFile;
   QString m_errorString;
+  FailureStage m_failureStage = FailureStage::None;
 };
 
 
