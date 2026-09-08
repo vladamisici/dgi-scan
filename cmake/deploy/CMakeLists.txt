@@ -7,18 +7,33 @@ if (WIN32 AND (CMAKE_VERSION VERSION_GREATER_EQUAL "3.16"))
   # started and then died before it could put a window on screen. Resolving the
   # dependencies of what has actually been installed catches them whatever the
   # toolchain happened to link against.
+  # Where to look for the libraries a dependency itself pulls in.
+  #
+  # Both the location and the import library are consulted, and for each the
+  # sibling "bin" directory as well: a package manager records libtiff as
+  # <prefix>/lib/tiff.lib while the DLL it needs at run time - and the jpeg,
+  # lzma and zlib DLLs *it* depends on - live in <prefix>/bin. Looking only at
+  # the recorded directory finds them solely when some other target happens to
+  # point at that bin directory already, which is luck rather than a rule: it
+  # holds when Qt comes from the same package manager and breaks the moment Qt
+  # is installed separately.
   set(_st_dep_search_dirs "")
   foreach (_st_target Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Svg Qt5::Network Qt5::Xml
                       TIFF::TIFF PNG::PNG ZLIB::ZLIB JPEG::JPEG)
     if (TARGET ${_st_target})
-      foreach (_st_prop IMPORTED_LOCATION_RELEASE IMPORTED_LOCATION)
+      foreach (_st_prop IMPORTED_LOCATION_RELEASE IMPORTED_LOCATION
+                        IMPORTED_IMPLIB_RELEASE IMPORTED_IMPLIB)
         get_target_property(_st_loc ${_st_target} ${_st_prop})
         if (_st_loc)
           get_filename_component(_st_dir "${_st_loc}" DIRECTORY)
-          list(APPEND _st_dep_search_dirs "${_st_dir}")
+          get_filename_component(_st_parent "${_st_dir}" DIRECTORY)
+          list(APPEND _st_dep_search_dirs "${_st_dir}" "${_st_parent}/bin")
         endif()
       endforeach()
     endif()
+  endforeach()
+  foreach (_st_prefix ${CMAKE_PREFIX_PATH})
+    list(APPEND _st_dep_search_dirs "${_st_prefix}/bin")
   endforeach()
   if (_st_dep_search_dirs)
     list(REMOVE_DUPLICATES _st_dep_search_dirs)
