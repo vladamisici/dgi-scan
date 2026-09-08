@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "ProjectWriter.h"
-#include "RecentProjects.h"
+#include "ProjectHistory.h"
 
 OutOfMemoryDialog::OutOfMemoryDialog(QWidget* parent) : QDialog(parent) {
   ui.setupUi(this);
@@ -75,10 +75,10 @@ void OutOfMemoryDialog::saveProjectAs() {
     QSettings settings;
     settings.setValue("project/lastDir", QFileInfo(m_projectFile).absolutePath());
 
-    RecentProjects rp;
-    rp.read();
-    rp.setMostRecent(m_projectFile);
-    rp.write();
+    core::ProjectHistory history;
+    history.read();
+    history.touch(m_projectFile, m_pages ? m_pages->numImages() : 0, m_outFileNameGen.outDir());
+    history.write();
   }
 }  // OutOfMemoryDialog::saveProjectAs
 

@@ -14,10 +14,10 @@ set(common_sources
     ImageInfo.cpp ImageInfo.h
     ImageFileInfo.cpp ImageFileInfo.h
     ImageMetadata.cpp ImageMetadata.h
-    RecentProjects.cpp RecentProjects.h
     OutOfMemoryHandler.cpp OutOfMemoryHandler.h
     CrashHandler.cpp CrashHandler.h
     ProjectRecovery.cpp ProjectRecovery.h
+    ProjectHistory.cpp ProjectHistory.h
     PageSelectionAccessor.cpp PageSelectionAccessor.h
     PageSelectionProvider.h
     ContentSpanFinder.cpp ContentSpanFinder.h

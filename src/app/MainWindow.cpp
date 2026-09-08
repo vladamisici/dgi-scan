@@ -55,7 +55,7 @@
 #include "ProjectPages.h"
 #include "ProjectReader.h"
 #include "ProjectWriter.h"
-#include "RecentProjects.h"
+#include "ProjectHistory.h"
 #include "RelinkingDialog.h"
 #include "ScopedIncDec.h"
 #include "SettingsDialog.h"
@@ -1604,10 +1604,10 @@ bool MainWindow::saveProjectAsTriggered() {
   QSettings settings;
   settings.setValue("project/lastDir", QFileInfo(m_projectFile).absolutePath());
 
-  RecentProjects rp;
-  rp.read();
-  rp.setMostRecent(m_projectFile);
-  rp.write();
+  ProjectHistory history;
+  history.read();
+  history.touch(m_projectFile, m_pages ? m_pages->numImages() : 0, m_outFileNameGen.outDir());
+  history.write();
   return true;
 }  // MainWindow::saveProjectAsTriggered
 
@@ -1696,12 +1696,13 @@ void MainWindow::loadProjectDocument(const QString& projectFile, const QString& 
 
 void MainWindow::projectOpened(ProjectOpeningContext* context) {
   // An empty project file is a recovered session that has never been saved: it
-  // has no location worth remembering and nothing to put in the recent list.
+  // has no location worth remembering and nothing to put in the history.
   if (!context->projectFile().isEmpty()) {
-    RecentProjects rp;
-    rp.read();
-    rp.setMostRecent(context->projectFile());
-    rp.write();
+    ProjectHistory history;
+    history.read();
+    history.touch(context->projectFile(), context->projectReader()->pages()->numImages(),
+                  context->projectReader()->outputDirectory());
+    history.write();
 
     QSettings().setValue("project/lastDir", QFileInfo(context->projectFile()).absolutePath());
   }
