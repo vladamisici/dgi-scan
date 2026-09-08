@@ -474,6 +474,13 @@ endif()
 set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION "${CMAKE_INSTALL_BINDIR}")
 include(InstallRequiredSystemLibraries)
 
+# Deployment of transitive runtime dependencies. Added last on purpose: CMake
+# includes subdirectory install scripts after the top-level ones, and this step
+# has to run once everything else is already in the install tree.
+if (WIN32)
+  add_subdirectory(cmake/deploy)
+endif()
+
 # Packaging
 set(CPACK_PACKAGE_NAME "${APPLICATION_NAME}")
 set(CPACK_PACKAGE_VERSION_MAJOR "${APPLICATION_VERSION_MAJOR}")
