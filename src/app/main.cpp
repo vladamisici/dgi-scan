@@ -70,11 +70,12 @@ int main(int argc, char* argv[]) {
 
   if (args.size() > 1) {
     mainWnd->openProject(args.at(1));
+  } else {
+    // Only when no project was named on the command line. openProject() is not
+    // synchronous - it can put up the Fix DPI dialog and finish later - so
+    // testing "is a project loaded yet" here would not be a reliable guard.
+    mainWnd->offerUnsavedSessionRecovery();
   }
-
-  // After any project named on the command line has been opened, so that a
-  // recovery offer never competes with an explicit request.
-  mainWnd->offerUnsavedSessionRecovery();
 
   return Application::exec();
 }  // main

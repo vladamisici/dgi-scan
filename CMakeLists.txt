@@ -30,23 +30,6 @@ if (NOT DEFAULT_COMPILER_FLAGS_IS_SET)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /D_SECURE_SCL=0")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /D_SECURE_SCL=0")
 
-    # Ship release builds with symbols in a separate .pdb. Without them a crash
-    # dump collected from an operator's machine is just a list of addresses, which
-    # is why field reports of silent terminations could never be diagnosed. /Zi
-    # emits the symbols; the /OPT flags restore the linker optimisations that
-    # /DEBUG would otherwise turn off, so the shipped code stays equivalent.
-    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /Zi")
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Zi")
-    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
-    set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
-
-    if (CMAKE_SIZEOF_VOID_P EQUAL 4)
-      # A 32-bit process is capped at 2 GB of address space unless it declares
-      # itself large-address-aware, even on 64-bit Windows. Large titles hit that
-      # ceiling, and the code already special-cases 32-bit in three places.
-      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /LARGEADDRESSAWARE")
-    endif()
-
     if (DEBUG_CLI)
       set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /DDEBUG_CLI")
       set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /DDEBUG_CLI")
@@ -59,14 +42,6 @@ if (NOT DEFAULT_COMPILER_FLAGS_IS_SET)
   if (CMAKE_COMPILER_IS_GNUCC AND CMAKE_COMPILER_IS_GNUCXX)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wpedantic -Werror=return-type -Wno-unused")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic -Werror=return-type -Wno-unused")
-
-    # Same reasoning as the MSVC branch: keep the optimisation level, add symbols.
-    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -g")
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -g")
-
-    if (WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
-      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--large-address-aware")
-    endif()
   endif()
 
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}"
@@ -76,16 +51,53 @@ if (NOT DEFAULT_COMPILER_FLAGS_IS_SET)
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}"
       CACHE STRING "Common link flags for all build configurations." FORCE)
 
+  set(DEFAULT_COMPILER_FLAGS_IS_SET YES CACHE INTERNAL "" FORCE)
+endif()
+
+# Deliberately guarded by its own sentinel rather than folded into the block
+# above: that one latches on the first configure, so a build tree created before
+# these flags existed would never acquire them.
+if (NOT SCANTAILOR_DIAGNOSTIC_FLAGS_IS_SET)
+  if (MSVC)
+    # Ship release builds with symbols in a separate .pdb. Without them a crash
+    # dump collected from an operator's machine is just a list of addresses,
+    # which is why field reports of silent terminations could never be acted on.
+    # /Zi emits the symbols; the /OPT flags put back the linker optimisations
+    # that /DEBUG would otherwise disable, so the shipped code stays equivalent.
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /Zi")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Zi")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
+    set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
+
+    if (CMAKE_SIZEOF_VOID_P EQUAL 4)
+      # A 32-bit process is capped at 2 GB of address space unless it declares
+      # itself large-address-aware, even on 64-bit Windows. Large titles hit that
+      # ceiling, and the code already special-cases 32-bit in three places.
+      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /LARGEADDRESSAWARE")
+    endif()
+  else()
+    # Same reasoning, for every compiler that takes -g (GCC, Clang, AppleClang):
+    # keep the optimisation level, add the symbols.
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -g")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -g")
+
+    if (WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--large-address-aware")
+    endif()
+  endif()
+
   set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}"
       CACHE STRING "C flags for release builds." FORCE)
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}"
       CACHE STRING "C++ flags for release builds." FORCE)
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}"
+      CACHE STRING "Common link flags for all build configurations." FORCE)
   set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE}"
       CACHE STRING "Link flags for release builds." FORCE)
   set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE}"
       CACHE STRING "Shared-library link flags for release builds." FORCE)
 
-  set(DEFAULT_COMPILER_FLAGS_IS_SET YES CACHE INTERNAL "" FORCE)
+  set(SCANTAILOR_DIAGNOSTIC_FLAGS_IS_SET YES CACHE INTERNAL "" FORCE)
 endif()
 
 if (UNIX)

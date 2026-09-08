@@ -8,7 +8,9 @@
 #include <core/IconProvider.h>
 #include <core/ProjectRecovery.h>
 
+#include <QCoreApplication>
 #include <QDir>
+#include <QEventLoop>
 #include <QFileDialog>
 #include <QFileSystemModel>
 #include <QMessageBox>
@@ -113,7 +115,9 @@ MainWindow::MainWindow()
       m_ignorePageOrderingChanges(0),
       m_debug(false),
       m_closing(false),
-      m_closeRequested(false) {
+      m_closeRequested(false),
+      m_ignoreAutoSave(0),
+      m_unsavedSessionOwned(false) {
   ApplicationSettings& settings = ApplicationSettings::getInstance();
 
   m_maxLogicalThumbSize = settings.getMaxLogicalThumbnailSize();
@@ -627,9 +631,16 @@ void MainWindow::offerUnsavedSessionRecovery() {
   msgBox.exec();
 
   if (msgBox.clickedButton() == recoverBtn) {
-    openProject(path);
+    // Loaded with no identity of its own, because the session never had one: the
+    // operator gets the Save As prompt on their next save, exactly as they would
+    // have without the crash. Opening the scratch file *as* the project would
+    // instead make it the project, and the offer would then repeat every start.
+    loadProjectDocument(QString(), path);
+    ProjectRecovery::discardUnsavedSession();
+    m_unsavedSessionOwned = true;
   } else if (msgBox.clickedButton() == discardBtn) {
     ProjectRecovery::discardUnsavedSession();
+    m_unsavedSessionOwned = true;
   }
 }
 
@@ -1012,7 +1023,7 @@ void MainWindow::currentPageChanged(const PageInfo& pageInfo,
 }
 
 /**
- * rief Called by the platform when the desktop session is ending.
+ * \brief Called by the platform when the desktop session is ending.
  *
  * There is no opportunity to prompt here - the shutdown is already underway and
  * blocking it would simply get the process killed - so this writes the recovery
@@ -1034,7 +1045,7 @@ void MainWindow::commitData(QSessionManager& manager) {
   if (!ApplicationSettings::getInstance().isCrashRecoveryEnabled()) {
     return;
   }
-  writeProjectQuietly(ProjectRecovery::snapshotPathFor(m_projectFile));
+  writeRecoverySnapshot();
 }
 
 /**
@@ -1054,7 +1065,7 @@ void MainWindow::commitData(QSessionManager& manager) {
  * would be worse than the problem it reports.
  */
 void MainWindow::autoSaveProject() {
-  if (!isProjectLoaded()) {
+  if (!isProjectLoaded() || m_ignoreAutoSave) {
     return;
   }
 
@@ -1066,6 +1077,17 @@ void MainWindow::autoSaveProject() {
     if (ApplicationSettings::getInstance().isCrashRecoveryEnabled() && !isBatchProcessingInProgress()) {
       const QString path = ProjectRecovery::unsavedSessionPath();
       if (!path.isEmpty()) {
+        if (!m_unsavedSessionOwned) {
+          // There is a snapshot here that this run never claimed - the operator
+          // cancelled the recovery offer, or opened a project from the command
+          // line so the offer never ran. Writing over it would destroy the only
+          // copy of that session's work.
+          const QString kept = ProjectRecovery::preserveUnsavedSession();
+          if (!kept.isEmpty()) {
+            CrashHandler::log(QLatin1String("Preserved an unclaimed recovery session as ") + kept);
+          }
+          m_unsavedSessionOwned = true;
+        }
         QDir().mkpath(QFileInfo(path).absolutePath());
         writeProjectQuietly(path);
       }
@@ -1092,18 +1114,38 @@ void MainWindow::autoSaveProject() {
   }
 
   if (recoveryEnabled) {
-    const QString snapshotPath = ProjectRecovery::snapshotPathFor(m_projectFile);
-    if (!writeProjectQuietly(snapshotPath)) {
-      CrashHandler::log(QLatin1String("Autosave: failed to write recovery snapshot to ") + snapshotPath);
-    }
+    writeRecoverySnapshot();
   }
 }
 
 /**
- * rief Writes the project without reporting failures to the user.
+ * \brief Writes the project without reporting failures to the user.
  *
  * \see autoSaveProject() for why silence matters here.
  */
+/**
+ * \brief Writes the recovery snapshot for the current project, if it is worth keeping.
+ *
+ * A snapshot identical to the project on disk represents no unsaved work. Keeping
+ * one would leave a file strictly newer than the project, which is exactly the
+ * condition that triggers the recovery offer - so every clean session would be
+ * followed by a prompt offering to restore nothing.
+ */
+bool MainWindow::writeRecoverySnapshot() {
+  const QString snapshotPath = ProjectRecovery::snapshotPathFor(m_projectFile);
+  if (snapshotPath.isEmpty()) {
+    return false;
+  }
+  if (!writeProjectQuietly(snapshotPath)) {
+    CrashHandler::log(QLatin1String("Autosave: failed to write recovery snapshot to ") + snapshotPath);
+    return false;
+  }
+  if (compareFiles(m_projectFile, snapshotPath)) {
+    ProjectRecovery::discardSnapshot(m_projectFile);
+  }
+  return true;
+}
+
 bool MainWindow::writeProjectQuietly(const QString& projectFile) {
   if (projectFile.isEmpty()) {
     return false;
@@ -1378,6 +1420,14 @@ void MainWindow::filterResult(const BackgroundTaskPtr& task, const FilterResultP
     return;
   }
 
+  // A null result means the task threw and was contained by the worker pool. The
+  // queues have been advanced above, which is what matters; there is simply no
+  // UI update to apply for that page.
+  if (!result) {
+    continueBatchProcessing();
+    return;
+  }
+
   if (!isBatchProcessingInProgress()) {
     if (!result->filter()) {
       // Error loading file.  No special action is necessary.
@@ -1396,6 +1446,11 @@ void MainWindow::filterResult(const BackgroundTaskPtr& task, const FilterResultP
   // for instance because thumbnail invalidation is done from here.
   result->updateUI(this);
 
+  continueBatchProcessing();
+}  // MainWindow::filterResult
+
+/** \brief Submits the next batch tasks, or finishes the batch if none are left. */
+void MainWindow::continueBatchProcessing() {
   if (isBatchProcessingInProgress()) {
     if (m_batchQueue->allProcessed()) {
       stopBatchProcessing();
@@ -1436,7 +1491,7 @@ void MainWindow::filterResult(const BackgroundTaskPtr& task, const FilterResultP
       m_thumbSequence->setSelection(page.id());
     }
   }
-}  // MainWindow::filterResult
+}  // MainWindow::continueBatchProcessing
 
 void MainWindow::debugToggled(const bool enabled) {
   m_debug = enabled;
@@ -1527,6 +1582,12 @@ bool MainWindow::saveProjectAsTriggered() {
     return false;
   }
 
+  // Saving under a new name leaves the old project's snapshot behind, which
+  // would later be offered as a recovery for work that has in fact been saved.
+  if (!m_projectFile.isEmpty() && (m_projectFile != projectFile)) {
+    ProjectRecovery::discardSnapshot(m_projectFile);
+  }
+
   m_projectFile = projectFile;
   updateWindowTitle();
   CrashHandler::setCurrentProjectFile(m_projectFile);
@@ -1599,7 +1660,20 @@ void MainWindow::openProject(const QString& projectFile) {
     }
   }
 
-  QFile file(fileToLoad);
+  loadProjectDocument(projectFile, fileToLoad);
+}
+
+/**
+ * \brief Loads the project held in \p documentPath under the identity of \p projectFile.
+ *
+ * The two differ when recovering: the contents come from a snapshot while the
+ * project keeps the identity the operator opened, so their next save goes where
+ * they expect and the snapshot is left alone until then. An empty \p projectFile
+ * means a recovered session that never had a file of its own, which is then
+ * treated as an unnamed project.
+ */
+void MainWindow::loadProjectDocument(const QString& projectFile, const QString& documentPath) {
+  QFile file(documentPath);
   if (!file.open(QIODevice::ReadOnly)) {
     QMessageBox::warning(this, tr("Error"), tr("Unable to open the project file."));
     return;
@@ -1613,21 +1687,22 @@ void MainWindow::openProject(const QString& projectFile) {
 
   file.close();
 
-  // Deliberately the project path, not fileToLoad: a recovered project keeps its
-  // own identity, so the next save goes to the project the operator opened and
-  // the snapshot stays untouched until then.
   auto* context = new ProjectOpeningContext(this, projectFile, doc);
   connect(context, SIGNAL(done(ProjectOpeningContext*)), SLOT(projectOpened(ProjectOpeningContext*)));
   context->proceed();
 }
 
 void MainWindow::projectOpened(ProjectOpeningContext* context) {
-  RecentProjects rp;
-  rp.read();
-  rp.setMostRecent(context->projectFile());
-  rp.write();
+  // An empty project file is a recovered session that has never been saved: it
+  // has no location worth remembering and nothing to put in the recent list.
+  if (!context->projectFile().isEmpty()) {
+    RecentProjects rp;
+    rp.read();
+    rp.setMostRecent(context->projectFile());
+    rp.write();
 
-  QSettings().setValue("project/lastDir", QFileInfo(context->projectFile()).absolutePath());
+    QSettings().setValue("project/lastDir", QFileInfo(context->projectFile()).absolutePath());
+  }
 
   switchToNewProject(context->projectReader()->pages(), context->projectReader()->outputDirectory(),
                      context->projectFile(), context->projectReader());
@@ -1712,6 +1787,12 @@ void MainWindow::handleOutOfMemorySituation() {
   m_outOfMemoryDialog->setParams(m_projectFile, m_stages, m_pages, m_selectedPage, m_outFileNameGen);
   m_outOfMemoryDialog->setAttribute(Qt::WA_DeleteOnClose);
   m_outOfMemoryDialog.release()->show();
+
+  // show() only schedules the paint. The teardown below drains the worker pool,
+  // which can hold the GUI thread for several seconds, and without this the
+  // operator would stare at an unpainted window for that whole time in the one
+  // situation where they most need to see what is being offered.
+  QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 
   // Releasing the caches gives the rescue save room to work, but it is only ever
   // best effort: the dialog already owns everything it needs to write the project.
@@ -1870,18 +1951,22 @@ void MainWindow::updateWindowTitle() {
  * \return true if the project was closed, false if the user cancelled the process.
  */
 bool MainWindow::closeProjectInteractive() {
-  // Qt delivers timer events inside the nested event loops of the prompts below.
-  // With the timer left running, an autosave could fire while "Save the project?"
-  // is on screen and write the very changes the operator is about to decline,
-  // making "Don't Save" silently not discard anything.
-  m_autoSaveTimer.stop();
+  // Qt delivers timer events inside the nested event loops of the prompts below,
+  // so an autosave could otherwise fire while "Save the project?" is on screen
+  // and write the very changes the operator is about to decline - making
+  // "Don't Save" silently not discard anything.
+  //
+  // Suppressed rather than stopped: this function has several paths that return
+  // without closing (the operator cancels, or a save fails), and stopping the
+  // timer would leave autosave switched off for the rest of the session on every
+  // one of them.
+  const ScopedIncDec<int> autoSaveGuard(m_ignoreAutoSave);
 
   if (!isProjectLoaded()) {
     return true;
   }
 
   if (m_projectFile.isEmpty()) {
-    ProjectRecovery::discardUnsavedSession();
     switch (promptProjectSave()) {
       case SAVE:
         if (!saveProjectTriggered()) {
@@ -1896,6 +1981,10 @@ bool MainWindow::closeProjectInteractive() {
       case CANCEL:
         return false;
     }
+    // Only now that the project is definitely being closed. Discarding it before
+    // the prompt meant answering Cancel destroyed the recovery snapshot of a
+    // session the operator had just chosen to keep working on.
+    ProjectRecovery::discardUnsavedSession();
     ProjectRecovery::discardSnapshot(m_projectFile);
     closeProjectWithoutSaving();
     return true;

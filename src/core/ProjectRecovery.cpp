@@ -77,6 +77,28 @@ bool ProjectRecovery::discardUnsavedSession() {
   return QFile::remove(path);
 }
 
+QString ProjectRecovery::preserveUnsavedSession() {
+  if (!hasUnsavedSession()) {
+    return QString();
+  }
+
+  const QString path = unsavedSessionPath();
+  const QFileInfo info(path);
+  const QString stem = info.absolutePath() + QLatin1String("/") + info.completeBaseName()
+                       + QLatin1String("-kept-") + info.lastModified().toString(QLatin1String("yyyyMMdd-hhmmss"));
+
+  // Numbered rather than overwritten, so several orphans can coexist.
+  for (int i = 0; i < 100; ++i) {
+    const QString candidate
+        = (i == 0) ? (stem + QLatin1String(".ScanTailor"))
+                   : (stem + QLatin1String("-") + QString::number(i) + QLatin1String(".ScanTailor"));
+    if (!QFileInfo::exists(candidate) && QFile::rename(path, candidate)) {
+      return candidate;
+    }
+  }
+  return QString();
+}
+
 bool ProjectRecovery::discardSnapshot(const QString& projectFilePath) {
   const QString path = snapshotPathFor(projectFilePath);
   if (path.isEmpty() || !QFileInfo::exists(path)) {

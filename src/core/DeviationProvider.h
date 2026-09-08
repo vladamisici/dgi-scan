@@ -13,7 +13,7 @@
 #include <unordered_map>
 
 /**
- * rief Tracks per-page values and tells which of them deviate from the mean.
+ * \brief Tracks per-page values and tells which of them deviate from the mean.
  *
  * Internally synchronised. Filter Settings objects update it from worker threads
  * as pages finish processing, while the GUI thread reads it to decorate and sort
@@ -45,7 +45,7 @@ class DeviationProvider {
   void setComputeValueByKey(const std::function<double(const K&)>& computeValueByKey);
 
  protected:
-  /** rief Recomputes the cached mean and deviation. Caller must hold m_mutex. */
+  /** \brief Recomputes the cached mean and deviation. Caller must hold m_mutex. */
   void update() const;
 
  private:

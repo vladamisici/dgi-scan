@@ -13,6 +13,7 @@
 #include <io.h>
 #include <windows.h>
 #else
+#include <cerrno>
 #include <unistd.h>
 #endif
 
@@ -32,20 +33,41 @@ namespace {
  * against. Genuine write failures are caught separately, by flushing the file
  * and inspecting its error state.
  */
-bool syncToDisk(QFile& file) {
+enum class SyncResult {
+  Synced,        /**< The data is on the storage device. */
+  Unsupported,   /**< This filesystem has no flush barrier; the write is still fine. */
+  Failed         /**< The flush genuinely failed - the data may not be there. */
+};
+
+SyncResult syncToDisk(QFile& file) {
   const int fd = file.handle();
   if (fd < 0) {
-    return false;
+    return SyncResult::Unsupported;
   }
 
 #ifdef Q_OS_WIN
   const HANDLE handle = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
   if (handle == INVALID_HANDLE_VALUE) {
-    return false;
+    return SyncResult::Unsupported;
   }
-  return ::FlushFileBuffers(handle) != 0;
+  if (::FlushFileBuffers(handle) != 0) {
+    return SyncResult::Synced;
+  }
+  const DWORD error = ::GetLastError();
+  // Some filesystems and network redirectors simply do not implement the
+  // barrier and say so. That is not a write failure and must not stop the save.
+  if ((error == ERROR_INVALID_FUNCTION) || (error == ERROR_NOT_SUPPORTED)) {
+    return SyncResult::Unsupported;
+  }
+  return SyncResult::Failed;
 #else
-  return ::fsync(fd) == 0;
+  if (::fsync(fd) == 0) {
+    return SyncResult::Synced;
+  }
+  if ((errno == EINVAL) || (errno == ENOTSUP) || (errno == EBADF)) {
+    return SyncResult::Unsupported;
+  }
+  return SyncResult::Failed;
 #endif
 }
 }  // namespace
@@ -78,11 +100,23 @@ bool AtomicFileOverwriter::commit() {
   // A write error that only surfaces at flush time - a full disk, a quota, a
   // share that went away mid-write - must not be promoted into a rename over
   // good data.
-  const bool written = m_tempFile->flush() && (m_tempFile->error() == QFileDevice::NoError);
-  if (written && !syncToDisk(*m_tempFile)) {
-    // Advisory only: see syncToDisk(). The data is written; it may just not be
-    // guaranteed on the platter yet.
-    qWarning() << "Could not flush" << tempFilePath << "to disk; continuing without a durability barrier";
+  bool written = m_tempFile->flush() && (m_tempFile->error() == QFileDevice::NoError);
+  if (written) {
+    switch (syncToDisk(*m_tempFile)) {
+      case SyncResult::Synced:
+        break;
+      case SyncResult::Unsupported:
+        // The data is written; it may just not be guaranteed on the platter yet.
+        // Refusing to save here would break saving outright on such filesystems.
+        break;
+      case SyncResult::Failed:
+        // A real flush failure means the bytes may never reach the share. Renaming
+        // this file over the operator's project would be the exact data loss the
+        // atomic write exists to prevent.
+        qCritical() << "Failed to flush" << tempFilePath << "to disk; the save is being abandoned";
+        written = false;
+        break;
+    }
   }
 
   // Yes, we have to destroy this object here, because:

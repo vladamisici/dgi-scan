@@ -1,2 +1,4 @@
 build/
 build-tests/
+build-fresh/
+build*/

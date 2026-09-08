@@ -73,6 +73,18 @@ class ProjectRecovery {
   /** \brief Removes the unsaved-session snapshot. */
   static bool discardUnsavedSession();
 
+  /**
+   * \brief Moves an unsaved-session snapshot aside instead of losing it.
+   *
+   * Used when a session that has not claimed the snapshot is about to write its
+   * own. Overwriting it would silently destroy the only copy of a previous
+   * run's work - the very thing the snapshot exists to prevent.
+   *
+   * \return The path it was moved to, or an empty string if there was nothing
+   *         to preserve or it could not be moved.
+   */
+  static QString preserveUnsavedSession();
+
   ProjectRecovery() = delete;
 };
 }  // namespace core

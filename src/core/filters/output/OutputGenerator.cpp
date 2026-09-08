@@ -1171,6 +1171,13 @@ std::unique_ptr<OutputImage> OutputGenerator::Processor::buildEmptyImage() const
     // dynamic_cast<OutputImageWithForeground*> to null and dereferenced. Blank
     // pages, inside covers and separator sheets are routine in book scanning, so
     // this crashed the application mid-run on perfectly normal titles.
+    //
+    // The split layers are produced by masking this base image, and the masking
+    // code accepts only Indexed8/RGB32/ARGB32 - BinaryImage::toQImage() gives
+    // Format_Mono, which would throw instead. getForegroundImage() converts back
+    // down to mono or indexed afterwards, exactly as for a non-blank page. The
+    // non-split branch keeps the mono image blank pages have always produced.
+    imageBuilder.setImage(badAllocIfNull(emptyImage.toQImage().convertToFormat(QImage::Format_RGB32)));
     imageBuilder.setForegroundType(getForegroundType());
     imageBuilder.setForegroundMask(emptyImage);
     if (m_renderParams.originalBackground()) {

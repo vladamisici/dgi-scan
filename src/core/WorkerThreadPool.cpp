@@ -66,19 +66,31 @@ void WorkerThreadPool::submitTask(const BackgroundTaskPtr& task) {
         }
       } catch (const std::bad_alloc&) {
         OutOfMemoryHandler::instance().handleOutOfMemorySituation();
+        reportFailure();
       } catch (const std::exception& e) {
-        // Until these two handlers existed, anything other than bad_alloc escaped
+        // Until these handlers existed, anything other than bad_alloc escaped
         // QRunnable::run() and reached std::terminate, which kills the process
         // outright - no dialog, no chance to save. Dropping one page's result
         // costs that page a reprocess; letting the exception through cost the
         // operator their entire session.
         qCritical() << "Background task failed:" << e.what();
+        reportFailure();
       } catch (...) {
         qCritical() << "Background task failed with an unknown exception";
+        reportFailure();
       }
     }
 
    private:
+    /**
+     * A failed task must still be reported, with a null result. The queues are
+     * only ever advanced from MainWindow::filterResult(), which this event is
+     * what triggers - so staying silent here would leave the task's entry in the
+     * queue forever, and batch processing would stop dead on the first page that
+     * threw rather than carrying on to the rest of the title.
+     */
+    void reportFailure() { QCoreApplication::postEvent(&m_owner, new TaskResultEvent(m_task, FilterResultPtr())); }
+
     WorkerThreadPool& m_owner;
     BackgroundTaskPtr m_task;
   };

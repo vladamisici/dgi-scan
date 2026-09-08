@@ -89,6 +89,8 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void openProject(const QString& projectFile);
 
+  void loadProjectDocument(const QString& projectFile, const QString& documentPath);
+
   /**
    * \brief Offers back a never-saved project left behind by an interrupted run.
    *
@@ -104,7 +106,7 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void autoSaveProject();
 
-  /** rief Saves a recovery snapshot when the desktop session ends. */
+  /** \brief Saves a recovery snapshot when the desktop session ends. */
   void commitData(QSessionManager& manager);
 
   void goFirstPage();
@@ -232,7 +234,7 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   SavePromptResult promptProjectSave();
 
   /**
-   * rief Asks what to do with a recovery snapshot left by an interrupted session.
+   * \brief Asks what to do with a recovery snapshot left by an interrupted session.
    */
   RecoveryPromptResult promptProjectRecovery(const QString& projectFile);
 
@@ -282,12 +284,18 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   bool saveProjectWithFeedback(const QString& projectFile);
 
   /**
-   * rief Writes the project without reporting failures to the user.
+   * \brief Writes the project without reporting failures to the user.
    *
    * For unattended saves, where a modal warning would interrupt the operator
    * mid-edit. Failures go to the log instead.
    */
+  /** \brief Submits the next batch tasks, or finishes the batch if none are left. */
+  void continueBatchProcessing();
+
   bool writeProjectQuietly(const QString& projectFile);
+
+  /** \brief Writes the recovery snapshot, discarding it if it matches the saved project. */
+  bool writeRecoverySnapshot();
 
   void showInsertFileDialog(BeforeOrAfter beforeOrAfter, const ImageId& existig);
 
@@ -356,6 +364,10 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   bool m_closing;
   /** Guards against re-entering the deferred close sequence. \see closeEvent() */
   bool m_closeRequested;
+  /** Non-zero while an unattended save must not happen. \see closeProjectInteractive() */
+  int m_ignoreAutoSave;
+  /** Whether this run may write the shared unsaved-session snapshot. */
+  bool m_unsavedSessionOwned;
   QTimer m_autoSaveTimer;
   StatusBarPanel* m_statusBarPanel;
   QActionGroup* m_unitsMenuActionGroup;

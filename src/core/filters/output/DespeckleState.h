@@ -28,7 +28,7 @@ class DespeckleState {
   DespeckleState(const QImage& output, const imageproc::BinaryImage& speckles, double level, const Dpi& dpi);
 
   /**
-   * rief Records the despeckling parameters without building the display images.
+   * \brief Records the despeckling parameters without building the display images.
    *
    * For batch processing, where the despeckling UI is never constructed. The
    * full constructor's m_everythingMixed is an RGB32 copy of the output image -

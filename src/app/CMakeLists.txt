@@ -79,9 +79,12 @@ target_include_directories(
     "$<TARGET_PROPERTY:TIFF::TIFF,INTERFACE_INCLUDE_DIRECTORIES>")
 install(TARGETS scantailor RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 if (MSVC)
-  # Ship the symbols with the binary. A minidump collected from an operator
-  # machine is unreadable without the .pdb that matches the exact build.
-  install(FILES "$<TARGET_PDB_FILE:scantailor>" DESTINATION "${CMAKE_INSTALL_BINDIR}" OPTIONAL)
+  # A minidump is unreadable without the .pdb matching that exact build, so the
+  # symbols must be kept - but in their own component, not in the installer the
+  # operators run: the file is tens of megabytes and of no use on their machines.
+  # Package it separately with: cpack -D CPACK_COMPONENTS_ALL=symbols
+  install(FILES "$<TARGET_PDB_FILE:scantailor>"
+      DESTINATION "symbols" COMPONENT symbols EXCLUDE_FROM_ALL OPTIONAL)
 endif()
 
 translation_sources(scantailor ${gui_only_sources} ${gui_only_ui_files})

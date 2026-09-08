@@ -33,7 +33,7 @@ class ApplicationSettings {
   void setAutoSaveProjectEnabled(bool enabled);
 
   /**
-   * rief How often, in seconds, the project is saved unattended.
+   * \brief How often, in seconds, the project is saved unattended.
    *
    * Applies both to the autosave that overwrites the project file (when that is
    * enabled) and to the crash-recovery snapshot. Clamped to a sane range on read.
@@ -43,7 +43,7 @@ class ApplicationSettings {
   void setAutoSaveIntervalSec(int seconds);
 
   /**
-   * rief Whether a recovery snapshot is kept alongside the project file.
+   * \brief Whether a recovery snapshot is kept alongside the project file.
    *
    * The snapshot lets an interrupted session (a crash, a lost remote-desktop
    * connection, a machine going to sleep) be resumed from the last snapshot

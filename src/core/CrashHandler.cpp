@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <exception>
 
 #ifdef Q_OS_WIN
@@ -26,7 +27,8 @@
 
 namespace core {
 namespace {
-// Guards the log file only. Never taken from a crash handler.
+// Guards the log file. A crash handler may only ever tryLock() it: see
+// writeToLogNonBlocking().
 QMutex g_logMutex;
 QString g_reportDir;
 QString g_logPath;
@@ -60,22 +62,37 @@ void appendCrashNote(const wchar_t* stemPath, const char* reason, const void* ad
   SYSTEMTIME st;
   ::GetLocalTime(&st);
 
-  char buf[2048];
-  const int len = _snprintf(buf, sizeof(buf) - 1,
-                            "ScanTailor Advanced crash report\r\n"
-                            "time      : %04u-%02u-%02u %02u:%02u:%02u\r\n"
-                            "reason    : %s\r\n"
-                            "code      : 0x%08lx\r\n"
-                            "address   : %p\r\n"
-                            "process   : %lu (%u-bit)\r\n"
-                            "thread    : %lu\r\n"
-                            "project   : %ls\r\n",
-                            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, reason, code, address,
-                            ::GetCurrentProcessId(), static_cast<unsigned>(sizeof(void*) * 8), ::GetCurrentThreadId(),
-                            g_projectFileW[0] ? g_projectFileW : L"<none>");
-  if (len > 0) {
-    DWORD written = 0;
-    ::WriteFile(file, buf, static_cast<DWORD>(len), &written, nullptr);
+  // Formatted wide and converted once, rather than formatted narrow with a %ls
+  // for the project path. The narrow printf converts %ls through the CRT's ANSI
+  // codepage and returns -1 for the whole call the moment one character will not
+  // fit - so a project path containing, say, a Romanian s-comma or any Cyrillic
+  // or CJK character discarded the entire report, including the plain-ASCII
+  // reason and fault address, leaving a zero-byte file.
+  wchar_t noteW[2048];
+  const int wlen = _snwprintf(noteW, (sizeof(noteW) / sizeof(noteW[0])) - 1,
+                              L"ScanTailor Advanced crash report\r\n"
+                              L"time      : %04u-%02u-%02u %02u:%02u:%02u\r\n"
+                              L"reason    : %S\r\n"
+                              L"code      : 0x%08lx\r\n"
+                              L"address   : %p\r\n"
+                              L"process   : %lu (%u-bit)\r\n"
+                              L"thread    : %lu\r\n"
+                              L"project   : %s\r\n",
+                              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, reason, code, address,
+                              ::GetCurrentProcessId(), static_cast<unsigned>(sizeof(void*) * 8),
+                              ::GetCurrentThreadId(), g_projectFileW[0] ? g_projectFileW : L"<none>");
+  // A negative return means truncation, not "produce nothing": write whatever
+  // was formatted rather than throwing the report away.
+  noteW[(sizeof(noteW) / sizeof(noteW[0])) - 1] = 0;
+  const int wcount = (wlen > 0) ? wlen : static_cast<int>(::wcslen(noteW));
+
+  if (wcount > 0) {
+    char utf8[4096];
+    const int bytes = ::WideCharToMultiByte(CP_UTF8, 0, noteW, wcount, utf8, sizeof(utf8), nullptr, nullptr);
+    if (bytes > 0) {
+      DWORD written = 0;
+      ::WriteFile(file, utf8, static_cast<DWORD>(bytes), &written, nullptr);
+    }
   }
   ::CloseHandle(file);
 }
@@ -165,8 +182,8 @@ void pureCallHandler() {
 #endif  // _MSC_VER
 #endif  // Q_OS_WIN
 
-void writeToLog(const QString& line) {
-  const QMutexLocker locker(&g_logMutex);
+/** Appends one line. The caller must hold g_logMutex. */
+void appendLineLocked(const QString& line) {
   if (g_logPath.isEmpty()) {
     return;
   }
@@ -175,9 +192,40 @@ void writeToLog(const QString& line) {
     return;
   }
   QTextStream stream(&file);
+  stream.setCodec("UTF-8");
   stream << line << '\n';
   stream.flush();
   file.close();
+
+  // Checked here rather than only at startup: a machine that is never restarted
+  // would otherwise let the log grow without bound despite MAX_LOG_BYTES.
+  if (file.size() >= MAX_LOG_BYTES) {
+    const QString previous = g_logPath + QLatin1String(".1");
+    QFile::remove(previous);
+    QFile::rename(g_logPath, previous);
+  }
+}
+
+void writeToLog(const QString& line) {
+  const QMutexLocker locker(&g_logMutex);
+  appendLineLocked(line);
+}
+
+/**
+ * \brief Logs from a crash handler, giving up rather than waiting for the lock.
+ *
+ * The thread that is dying may be the one already holding g_logMutex - it can be
+ * killed by an allocation failure inside appendLineLocked() itself. Blocking
+ * there would hang the process instead of letting it write its dump and exit,
+ * which is precisely the "the window just froze" behaviour this work exists to
+ * remove.
+ */
+void writeToLogNonBlocking(const QString& line) {
+  if (!g_logMutex.tryLock()) {
+    return;
+  }
+  appendLineLocked(line);
+  g_logMutex.unlock();
 }
 
 /**
@@ -205,8 +253,8 @@ void terminateHandler() {
 #ifdef Q_OS_WIN
   writeCrashReport(nullptr, reason);
 #endif
-  writeToLog(QString::fromLatin1("%1 [FATAL] %2")
-                 .arg(QDateTime::currentDateTime().toString(Qt::ISODate), QString::fromLatin1(reason)));
+  writeToLogNonBlocking(QString::fromLatin1("%1 [FATAL] %2")
+                            .arg(QDateTime::currentDateTime().toString(Qt::ISODate), QString::fromUtf8(reason)));
 
   // The contract of a terminate handler is that it never returns.
   std::abort();
@@ -234,7 +282,7 @@ extern "C" void signalHandler(int signalNumber) {
 #ifdef Q_OS_WIN
   writeCrashReport(nullptr, reason);
 #else
-  writeToLog(QString::fromLatin1("FATAL: ") + QString::fromLatin1(reason));
+  writeToLogNonBlocking(QString::fromLatin1("FATAL: ") + QString::fromUtf8(reason));
 #endif
 
   ::signal(signalNumber, SIG_DFL);
