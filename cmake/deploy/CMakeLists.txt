@@ -61,7 +61,11 @@ if (WIN32 AND (CMAKE_VERSION VERSION_GREATER_EQUAL "3.16"))
             "^oleaut32.*" "^ws2_32.*" "^comdlg32.*" "^winspool.*" "^imm32.*" "^winmm.*"
             "^dwmapi.*" "^uxtheme.*" "^d3d[0-9]+.*" "^opengl32.*" "^dbghelp.*" "^version.*"
             "^crypt32.*" "^netapi32.*" "^userenv.*" "^mpr.*" "^authz.*" "^wtsapi32.*"
-        POST_EXCLUDE_REGEXES ".*[/\][Ss]ystem32[/\].*" ".*[/\][Ww]in[Ss]x[Ss][/\].*"
+        # The generated cmake_install.cmake is itself parsed as CMake, so a
+        # backslash inside these regexes has to be written doubled here to
+        # survive as one. Written singly it is an invalid escape, and CMake
+        # discards the whole exclusion.
+        POST_EXCLUDE_REGEXES ".*[/\\][Ss]ystem32[/\\].*" ".*[/\\][Ww]in[Ss]x[Ss][/\\].*"
         CONFLICTING_DEPENDENCIES_PREFIX _st_conflicting)
     foreach (_st_dep IN LISTS _st_resolved)
       file(INSTALL DESTINATION "${_st_root}" TYPE SHARED_LIBRARY FOLLOW_SYMLINK_CHAIN FILES "${_st_dep}")
