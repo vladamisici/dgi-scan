@@ -10,6 +10,7 @@
 
 #include "AbstractFilter.h"
 #include "AtomicFileOverwriter.h"
+#include "CrashHandler.h"
 #include "FileNameDisambiguator.h"
 #include "ImageId.h"
 #include "ImageMetadata.h"
@@ -65,7 +66,9 @@ ProjectWriter::ProjectWriter(const std::shared_ptr<ProjectPages>& pageSequence,
 
 ProjectWriter::~ProjectWriter() = default;
 
-bool ProjectWriter::write(const QString& filePath, const std::vector<FilterPtr>& filters) const {
+bool ProjectWriter::write(const QString& filePath,
+                          const std::vector<FilterPtr>& filters,
+                          QString* errorMessage) const {
   QDomDocument doc;
   QDomElement rootEl(doc.createElement("project"));
   doc.appendChild(rootEl);
@@ -99,10 +102,47 @@ bool ProjectWriter::write(const QString& filePath, const std::vector<FilterPtr>&
   //
   // Note that the QTextStream codec is deliberately left at its default so the
   // on-disk encoding stays byte-for-byte what previous versions produced.
+  const auto fail = [errorMessage](const QString& reason) {
+    if (errorMessage) {
+      *errorMessage = reason;
+    }
+    core::CrashHandler::log(QLatin1String("Saving the project failed: ") + reason);
+    return false;
+  };
+
   AtomicFileOverwriter overwriter;
   QIODevice* const device = overwriter.startWriting(filePath);
   if (!device) {
-    return false;
+    // The atomic write needs permission to create a file in the project's
+    // folder. A share can withhold exactly that while still allowing an
+    // existing file to be modified, and on such a folder the operator would be
+    // unable to save at all - a certain loss of their work, to avoid a risked
+    // one. So fall back to writing in place, which is what the application
+    // always did before, and record loudly that the protection is off for this
+    // save.
+    const QString atomicFailure = overwriter.errorString();
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+      return fail(QObject::tr("%1; and writing directly to it failed too (%2)")
+                      .arg(atomicFailure, file.errorString()));
+    }
+    {
+      QTextStream strm(&file);
+      doc.save(strm, 2);
+      strm.flush();
+      if (strm.status() != QTextStream::Ok) {
+        return fail(QObject::tr("could not write the project data to \"%1\"").arg(filePath));
+      }
+    }
+    if (!file.flush() || (file.error() != QFileDevice::NoError)) {
+      return fail(QObject::tr("could not write \"%1\" (%2)").arg(filePath, file.errorString()));
+    }
+    file.close();
+    core::CrashHandler::log(QLatin1String("Wrote \"") + filePath
+                            + QLatin1String("\" in place, without the usual protection against an interrupted "
+                                            "save, because ")
+                            + atomicFailure);
+    return true;
   }
 
   {
@@ -111,10 +151,13 @@ bool ProjectWriter::write(const QString& filePath, const std::vector<FilterPtr>&
     strm.flush();
     if (strm.status() != QTextStream::Ok) {
       overwriter.abort();
-      return false;
+      return fail(QObject::tr("could not write the project data to \"%1\"").arg(filePath));
     }
   }
-  return overwriter.commit();
+  if (!overwriter.commit()) {
+    return fail(overwriter.errorString());
+  }
+  return true;
 }  // ProjectWriter::write
 
 QDomElement ProjectWriter::processDirectories(QDomDocument& doc) const {

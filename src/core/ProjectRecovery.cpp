@@ -3,6 +3,7 @@
 
 #include "ProjectRecovery.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -50,6 +51,22 @@ bool ProjectRecovery::isSnapshotNewerThanProject(const QString& projectFilePath)
     return true;
   }
   return snapshotTimestamp(projectFilePath) > projectInfo.lastModified();
+}
+
+QString ProjectRecovery::localSnapshotPathFor(const QString& projectFilePath) {
+  if (projectFilePath.isEmpty()) {
+    return QString();
+  }
+  const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+  if (dir.isEmpty()) {
+    return QString();
+  }
+  // The full path is hashed into the name so that two projects with the same
+  // file name do not overwrite one another, while the name stays recognisable.
+  const QString digest = QString::fromLatin1(
+      QCryptographicHash::hash(projectFilePath.toUtf8(), QCryptographicHash::Sha1).toHex().left(8));
+  return dir + QLatin1String("/recovery/") + QFileInfo(projectFilePath).completeBaseName() + QLatin1Char('-') + digest
+         + QLatin1String(".ScanTailor");
 }
 
 QString ProjectRecovery::unsavedSessionPath() {

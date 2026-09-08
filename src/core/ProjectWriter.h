@@ -41,7 +41,16 @@ class ProjectWriter {
 
   ~ProjectWriter();
 
-  bool write(const QString& filePath, const std::vector<FilterPtr>& filters) const;
+  /**
+   * \brief Writes the project.
+   *
+   * \param errorMessage If given, receives why the write failed. A save that
+   *        fails needs to say which step failed and what the system reported;
+   *        "Error saving the project file!" on its own is not actionable.
+   */
+  bool write(const QString& filePath,
+             const std::vector<FilterPtr>& filters,
+             QString* errorMessage = nullptr) const;
 
   /**
    * \p out will be called like this: out(ImageId, numeric_image_id)

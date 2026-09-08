@@ -74,6 +74,16 @@ class ProjectRecovery {
   static bool discardUnsavedSession();
 
   /**
+   * \brief A snapshot location in the user's own profile, for a named project.
+   *
+   * Used when the folder holding the project will not accept the snapshot - a
+   * share that allows existing files to be modified but not new ones refuses
+   * both the project save and the snapshot beside it, which would leave the
+   * operator with no protection at all. The user profile is always writable.
+   */
+  static QString localSnapshotPathFor(const QString& projectFilePath);
+
+  /**
    * \brief Moves an unsaved-session snapshot aside instead of losing it.
    *
    * Used when a session that has not claimed the snapshot is about to write its

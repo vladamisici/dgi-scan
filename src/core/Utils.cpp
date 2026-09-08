@@ -13,6 +13,8 @@
 #ifdef Q_OS_WIN
 #include <windows.h>
 #else
+#include <cerrno>
+#include <cstring>
 #include <stdio.h>
 #endif
 
@@ -22,6 +24,34 @@ bool Utils::overwritingRename(const QString& from, const QString& to) {
   return MoveFileExW((WCHAR*) from.utf16(), (WCHAR*) to.utf16(), MOVEFILE_REPLACE_EXISTING) != 0;
 #else
   return rename(QFile::encodeName(from).data(), QFile::encodeName(to).data()) == 0;
+#endif
+}
+
+QString Utils::lastSystemErrorString() {
+#ifdef Q_OS_WIN
+  const DWORD error = ::GetLastError();
+  if (error == ERROR_SUCCESS) {
+    return QString();
+  }
+  wchar_t* buffer = nullptr;
+  const DWORD length = ::FormatMessageW(
+      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, error,
+      MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), reinterpret_cast<wchar_t*>(&buffer), 0, nullptr);
+  QString message;
+  if (length && buffer) {
+    message = QString::fromWCharArray(buffer, static_cast<int>(length)).trimmed();
+  }
+  if (buffer) {
+    ::LocalFree(buffer);
+  }
+  return message.isEmpty() ? QString::fromLatin1("error %1").arg(error)
+                           : QString::fromLatin1("%1 [%2]").arg(message).arg(error);
+#else
+  const int error = errno;
+  if (error == 0) {
+    return QString();
+  }
+  return QString::fromLatin1("%1 [%2]").arg(QString::fromLocal8Bit(std::strerror(error))).arg(error);
 #endif
 }
 

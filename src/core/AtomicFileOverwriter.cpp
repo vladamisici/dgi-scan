@@ -5,6 +5,7 @@
 
 #include <QDebug>
 #include <QFile>
+#include <QObject>
 #include <QTemporaryFile>
 
 #include "Utils.h"
@@ -80,10 +81,18 @@ AtomicFileOverwriter::~AtomicFileOverwriter() {
 
 QIODevice* AtomicFileOverwriter::startWriting(const QString& filePath) {
   abort();
+  m_errorString.clear();
 
   m_tempFile = std::make_unique<QTemporaryFile>(filePath);
   m_tempFile->setAutoRemove(false);
   if (!m_tempFile->open()) {
+    // Worth spelling out, because this is the step that can fail where simply
+    // overwriting the existing file would have worked: writing here needs
+    // permission to create a NEW file in the directory, which a share can
+    // withhold while still allowing an existing file to be modified.
+    m_errorString = QObject::tr("could not create a temporary file next to \"%1\" (%2); "
+                                "saving this way needs permission to create files in that folder")
+                        .arg(filePath, m_tempFile->errorString());
     m_tempFile.reset();
   }
   return m_tempFile.get();
@@ -91,8 +100,10 @@ QIODevice* AtomicFileOverwriter::startWriting(const QString& filePath) {
 
 bool AtomicFileOverwriter::commit() {
   if (!m_tempFile) {
+    m_errorString = QObject::tr("nothing was being written");
     return false;
   }
+  m_errorString.clear();
 
   const QString tempFilePath(m_tempFile->fileName());
   const QString targetPath(m_tempFile->fileTemplate());
@@ -101,6 +112,9 @@ bool AtomicFileOverwriter::commit() {
   // share that went away mid-write - must not be promoted into a rename over
   // good data.
   bool written = m_tempFile->flush() && (m_tempFile->error() == QFileDevice::NoError);
+  if (!written) {
+    m_errorString = QObject::tr("could not write \"%1\" (%2)").arg(tempFilePath, m_tempFile->errorString());
+  }
   if (written) {
     switch (syncToDisk(*m_tempFile)) {
       case SyncResult::Synced:
@@ -113,6 +127,8 @@ bool AtomicFileOverwriter::commit() {
         // A real flush failure means the bytes may never reach the share. Renaming
         // this file over the operator's project would be the exact data loss the
         // atomic write exists to prevent.
+        m_errorString = QObject::tr("could not flush \"%1\" to disk (%2)")
+                            .arg(tempFilePath, Utils::lastSystemErrorString());
         qCritical() << "Failed to flush" << tempFilePath << "to disk; the save is being abandoned";
         written = false;
         break;
@@ -130,6 +146,8 @@ bool AtomicFileOverwriter::commit() {
   }
 
   if (!Utils::overwritingRename(tempFilePath, targetPath)) {
+    m_errorString = QObject::tr("could not replace \"%1\" with the file just written (%2)")
+                        .arg(targetPath, Utils::lastSystemErrorString());
     QFile::remove(tempFilePath);
     return false;
   }

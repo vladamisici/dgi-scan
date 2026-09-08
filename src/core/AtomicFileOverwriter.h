@@ -4,11 +4,11 @@
 #ifndef SCANTAILOR_CORE_ATOMICFILEOVERWRITER_H_
 #define SCANTAILOR_CORE_ATOMICFILEOVERWRITER_H_
 
+#include <QString>
 #include <memory>
 
 #include "NonCopyable.h"
 
-class QString;
 class QIODevice;
 class QTemporaryFile;
 
@@ -55,8 +55,20 @@ class AtomicFileOverwriter {
    */
   void abort();
 
+  /**
+   * \brief Why the last startWriting() or commit() failed.
+   *
+   * Empty when nothing has failed. This exists because "Error saving the
+   * project file!" on its own is not something support can act on: what
+   * matters is which step failed and what the operating system said about it -
+   * most usefully whether the directory refused to accept a new file, which is
+   * a permission that overwriting an existing file in place never needed.
+   */
+  const QString& errorString() const { return m_errorString; }
+
  private:
   std::unique_ptr<QTemporaryFile> m_tempFile;
+  QString m_errorString;
 };
 
 

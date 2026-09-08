@@ -1138,13 +1138,29 @@ bool MainWindow::writeRecoverySnapshot() {
   if (snapshotPath.isEmpty()) {
     return false;
   }
-  if (!writeProjectQuietly(snapshotPath)) {
-    CrashHandler::log(QLatin1String("Autosave: failed to write recovery snapshot to ") + snapshotPath);
+  if (writeProjectQuietly(snapshotPath)) {
+    if (compareFiles(m_projectFile, snapshotPath)) {
+      ProjectRecovery::discardSnapshot(m_projectFile);
+    }
+    return true;
+  }
+
+  // The folder that holds the project would not take the snapshot. That is the
+  // case where a snapshot matters most - if it will not accept a new file, the
+  // save is failing for the same reason - so put it in the user's own profile
+  // rather than leaving the operator with nothing.
+  const QString localPath = ProjectRecovery::localSnapshotPathFor(m_projectFile);
+  if (localPath.isEmpty()) {
     return false;
   }
-  if (compareFiles(m_projectFile, snapshotPath)) {
-    ProjectRecovery::discardSnapshot(m_projectFile);
+  QDir().mkpath(QFileInfo(localPath).absolutePath());
+  if (!writeProjectQuietly(localPath)) {
+    CrashHandler::log(QLatin1String("Autosave: could not write a recovery snapshot either beside the project or to ")
+                      + localPath);
+    return false;
   }
+  CrashHandler::log(QLatin1String("Autosave: the project's folder would not accept a snapshot; wrote it to ")
+                    + localPath + QLatin1String(" instead"));
   return true;
 }
 
@@ -1154,9 +1170,11 @@ bool MainWindow::writeProjectQuietly(const QString& projectFile) {
   }
 
   ProjectWriter writer(m_pages, m_selectedPage, m_outFileNameGen);
-  const bool ok = writer.write(projectFile, m_stages->filters());
+  QString error;
+  const bool ok = writer.write(projectFile, m_stages->filters(), &error);
   if (!ok) {
-    CrashHandler::log(QLatin1String("Autosave: failed to write ") + projectFile);
+    CrashHandler::log(QLatin1String("Autosave: failed to write ") + projectFile
+                      + (error.isEmpty() ? QString() : QLatin1String(" - ") + error));
   }
   return ok;
 }
@@ -2058,8 +2076,18 @@ void MainWindow::closeProjectWithoutSaving() {
 bool MainWindow::saveProjectWithFeedback(const QString& projectFile) {
   ProjectWriter writer(m_pages, m_selectedPage, m_outFileNameGen);
 
-  if (!writer.write(projectFile, m_stages->filters())) {
-    QMessageBox::warning(this, tr("Error"), tr("Error saving the project file!"));
+  QString error;
+  if (!writer.write(projectFile, m_stages->filters(), &error)) {
+    // The reason is included deliberately. A bare "Error saving the project
+    // file!" tells the operator nothing they can act on and leaves support with
+    // nothing to go on either; the cause is usually specific and fixable, such
+    // as the folder not accepting new files.
+    QMessageBox::warning(this, tr("Error"),
+                         error.isEmpty()
+                             ? tr("Error saving the project file!")
+                             : tr("Error saving the project file!\n\n%1\n\nThe previously saved project has not "
+                                  "been changed. Use File > Save As... to save your work somewhere else.")
+                                   .arg(error));
     return false;
   }
 
