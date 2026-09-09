@@ -531,6 +531,24 @@ if (WIN32)
   # it. SHCTX follows the install scope, so a per-machine install registers for
   # every user and a per-user install only for that one. $\" is the NSIS escape
   # for a literal quote, needed around a path that may contain spaces.
+  set(CPACK_NSIS_EXTRA_PREINSTALL_COMMANDS [==[
+    ; A file that is in use cannot be overwritten, so check before writing
+    ; any of them rather than failing part-way through with a message about
+    ; some DLL. Overwriting the application while it runs is the single most
+    ; likely reason an upgrade fails, because the operator is usually working
+    ; in it when the update arrives.
+    st_check_running:
+    ClearErrors
+    IfFileExists '$INSTDIR\\scantailor.exe' 0 st_not_running
+    FileOpen $0 '$INSTDIR\\scantailor.exe' a
+    IfErrors 0 st_close_probe
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION 'Scantailor-DGI is still running.$\\r$\\n$\\r$\\nClose it and click Retry to continue the installation.' /SD IDCANCEL IDRETRY st_check_running
+    Abort 'Scantailor-DGI is running. Close it and start the installer again.'
+    st_close_probe:
+    FileClose $0
+    st_not_running:
+  ]==])
+
   set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS [==[
     WriteRegStr SHCTX 'Software\\Classes\\.ScanTailor' '' 'ScantailorDGI.Project'
     WriteRegStr SHCTX 'Software\\Classes\\ScantailorDGI.Project' '' 'Scantailor-DGI Project'
