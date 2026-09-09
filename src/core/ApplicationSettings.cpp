@@ -10,7 +10,9 @@
 
 const bool ApplicationSettings::DEFAULT_OPENGL_STATE = false;
 const QString ApplicationSettings::DEFAULT_COLOR_SCHEME = "dark";
-const bool ApplicationSettings::DEFAULT_AUTO_SAVE_PROJECT = false;
+const bool ApplicationSettings::DEFAULT_AUTO_SAVE_PROJECT = true;
+const int ApplicationSettings::DEFAULT_AUTO_SAVE_INTERVAL_SEC = 120;
+const bool ApplicationSettings::DEFAULT_CRASH_RECOVERY = true;
 const int ApplicationSettings::DEFAULT_TIFF_BW_COMPRESSION = COMPRESSION_CCITTFAX4;
 const int ApplicationSettings::DEFAULT_TIFF_COLOR_COMPRESSION = COMPRESSION_LZW;
 const bool ApplicationSettings::DEFAULT_BLACK_ON_WHITE_DETECTION = true;
@@ -33,6 +35,8 @@ const bool ApplicationSettings::DEFAULT_SHOW_CANCELING_SELECTION_QUESTION = true
 const QString ApplicationSettings::ROOT_KEY = "settings";
 const QString ApplicationSettings::OPENGL_STATE_KEY = "enable_opengl";
 const QString ApplicationSettings::AUTO_SAVE_PROJECT_KEY = "auto_save_project";
+const QString ApplicationSettings::AUTO_SAVE_INTERVAL_SEC_KEY = "auto_save_interval_sec";
+const QString ApplicationSettings::CRASH_RECOVERY_KEY = "crash_recovery";
 const QString ApplicationSettings::COLOR_SCHEME_KEY = "color_scheme";
 const QString ApplicationSettings::TIFF_BW_COMPRESSION_KEY = "bw_compression";
 const QString ApplicationSettings::TIFF_COLOR_COMPRESSION_KEY = "color_compression";
@@ -86,6 +90,25 @@ bool ApplicationSettings::isAutoSaveProjectEnabled() const {
 
 void ApplicationSettings::setAutoSaveProjectEnabled(bool enabled) {
   m_settings.setValue(getKey(AUTO_SAVE_PROJECT_KEY), enabled);
+}
+
+int ApplicationSettings::getAutoSaveIntervalSec() const {
+  const int value = m_settings.value(getKey(AUTO_SAVE_INTERVAL_SEC_KEY), DEFAULT_AUTO_SAVE_INTERVAL_SEC).toInt();
+  // A hand-edited or corrupt settings file must not be able to turn autosave
+  // into either a busy loop or a feature that never fires.
+  return qBound(15, value, 3600);
+}
+
+void ApplicationSettings::setAutoSaveIntervalSec(int seconds) {
+  m_settings.setValue(getKey(AUTO_SAVE_INTERVAL_SEC_KEY), qBound(15, seconds, 3600));
+}
+
+bool ApplicationSettings::isCrashRecoveryEnabled() const {
+  return m_settings.value(getKey(CRASH_RECOVERY_KEY), DEFAULT_CRASH_RECOVERY).toBool();
+}
+
+void ApplicationSettings::setCrashRecoveryEnabled(bool enabled) {
+  m_settings.setValue(getKey(CRASH_RECOVERY_KEY), enabled);
 }
 
 int ApplicationSettings::getTiffBwCompression() const {

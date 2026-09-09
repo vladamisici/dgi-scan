@@ -12,7 +12,7 @@ if (POLICY CMP0071)
   cmake_policy(SET CMP0071 NEW)
 endif()
 
-project("ScanTailor Advanced")
+project("Scantailor-DGI")
 
 # Set compiler flags.
 set(CMAKE_CXX_STANDARD 17)
@@ -52,6 +52,52 @@ if (NOT DEFAULT_COMPILER_FLAGS_IS_SET)
       CACHE STRING "Common link flags for all build configurations." FORCE)
 
   set(DEFAULT_COMPILER_FLAGS_IS_SET YES CACHE INTERNAL "" FORCE)
+endif()
+
+# Deliberately guarded by its own sentinel rather than folded into the block
+# above: that one latches on the first configure, so a build tree created before
+# these flags existed would never acquire them.
+if (NOT SCANTAILOR_DIAGNOSTIC_FLAGS_IS_SET)
+  if (MSVC)
+    # Ship release builds with symbols in a separate .pdb. Without them a crash
+    # dump collected from an operator's machine is just a list of addresses,
+    # which is why field reports of silent terminations could never be acted on.
+    # /Zi emits the symbols; the /OPT flags put back the linker optimisations
+    # that /DEBUG would otherwise disable, so the shipped code stays equivalent.
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /Zi")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Zi")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
+    set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
+
+    if (CMAKE_SIZEOF_VOID_P EQUAL 4)
+      # A 32-bit process is capped at 2 GB of address space unless it declares
+      # itself large-address-aware, even on 64-bit Windows. Large titles hit that
+      # ceiling, and the code already special-cases 32-bit in three places.
+      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /LARGEADDRESSAWARE")
+    endif()
+  else()
+    # Same reasoning, for every compiler that takes -g (GCC, Clang, AppleClang):
+    # keep the optimisation level, add the symbols.
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -g")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -g")
+
+    if (WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--large-address-aware")
+    endif()
+  endif()
+
+  set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}"
+      CACHE STRING "C flags for release builds." FORCE)
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}"
+      CACHE STRING "C++ flags for release builds." FORCE)
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}"
+      CACHE STRING "Common link flags for all build configurations." FORCE)
+  set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE}"
+      CACHE STRING "Link flags for release builds." FORCE)
+  set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE}"
+      CACHE STRING "Shared-library link flags for release builds." FORCE)
+
+  set(SCANTAILOR_DIAGNOSTIC_FLAGS_IS_SET YES CACHE INTERNAL "" FORCE)
 endif()
 
 if (UNIX)
@@ -163,6 +209,8 @@ endif()
 
 #================================= Boost ================================#
 
+option(BUILD_TESTING "Build the unit test suites." ON)
+
 if (WIN32)
   if (MINGW)
     if (CMAKE_SIZEOF_VOID_P EQUAL 8)
@@ -185,19 +233,34 @@ if (WIN32)
       HINTS ${boost_include_dir_hints}
       DOC "Boost include directory.")
 
-  set(Boost_USE_STATIC_LIBS ON)
+  # An option rather than a hard set, so a package manager that only ships
+  # shared Boost (vcpkg's x64-windows triplet, for one) can be used with
+  # -DBoost_USE_STATIC_LIBS=OFF instead of failing to configure.
+  option(Boost_USE_STATIC_LIBS "Link Boost statically." ON)
 endif()
 set(Boost_USE_MULTITHREADED ON)
 
-find_package(Boost 1.60 COMPONENTS unit_test_framework prg_exec_monitor REQUIRED)
+# The application itself uses only header-only Boost - multi_index, lambda, bind,
+# intrusive, iterator. unit_test_framework is needed purely by the test
+# executables, so requiring it here blocked the GUI build on a test-only
+# dependency.
+find_package(Boost 1.60 REQUIRED)
 
 include_directories(${Boost_INCLUDE_DIRS})
 add_definitions(-DBOOST_MULTI_INDEX_DISABLE_SERIALIZATION)
-if (NOT Boost_USE_STATIC_LIBS)
-  if (WIN32)
-    add_dynamic_library_locations(Boost::unit_test_framework Boost::prg_exec_monitor)
+
+if (BUILD_TESTING)
+  # prg_exec_monitor is deliberately not requested: the suites use
+  # BOOST_AUTO_TEST_MAIN, which unit_test_framework provides on its own. Asking
+  # for it only added a component that some Boost packages (vcpkg's among them)
+  # ship incompletely, which failed the configure step outright.
+  find_package(Boost 1.60 COMPONENTS unit_test_framework REQUIRED)
+  if (NOT Boost_USE_STATIC_LIBS)
+    if (WIN32)
+      add_dynamic_library_locations(Boost::unit_test_framework)
+    endif()
+    add_definitions(-DBOOST_TEST_DYN_LINK)
   endif()
-  add_definitions(-DBOOST_TEST_DYN_LINK)
 endif()
 
 #=================================== Qt ===================================#
@@ -231,14 +294,20 @@ if (WIN32 AND MSVC)
   add_definitions(-DNOMINMAX)
 endif()
 
-enable_testing()
+if (BUILD_TESTING)
+  enable_testing()
+endif()
 
 # Prepare config.h
 option(PORTABLE_VERSION "Whether to build the portable version." ON)
 if (PORTABLE_VERSION)
   set(PORTABLE_CONFIG_DIR "config")
 endif()
-set(APPLICATION_NAME "scantailor-advanced")
+# The identifier used for settings, install paths and package file names.
+set(APPLICATION_NAME "scantailor-dgi")
+# The name shown to people: window title, About box, installer, Start menu.
+set(APPLICATION_DISPLAY_NAME "Scantailor-DGI")
+set(APPLICATION_VENDOR "DGI")
 if (WIN32)
   set(TRANSLATION_DIRS ".:translations")
   set(PLUGIN_DIRS ".")
@@ -409,28 +478,89 @@ endif()
 set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION "${CMAKE_INSTALL_BINDIR}")
 include(InstallRequiredSystemLibraries)
 
+# Deployment of transitive runtime dependencies. Added last on purpose: CMake
+# includes subdirectory install scripts after the top-level ones, and this step
+# has to run once everything else is already in the install tree.
+if (WIN32)
+  add_subdirectory(cmake/deploy)
+endif()
+
 # Packaging
 set(CPACK_PACKAGE_NAME "${APPLICATION_NAME}")
+set(APPLICATION_URL "https://github.com/vladamisici/dgi-scan")
 set(CPACK_PACKAGE_VERSION_MAJOR "${APPLICATION_VERSION_MAJOR}")
 set(CPACK_PACKAGE_VERSION_MINOR "${APPLICATION_VERSION_MINOR}")
 set(CPACK_PACKAGE_VERSION_PATCH "${APPLICATION_VERSION_PATCH}")
-set(CPACK_PACKAGE_VENDOR "4lex4 <4lex49@zoho.com>")
+set(CPACK_PACKAGE_VENDOR "${APPLICATION_VENDOR}")
 set(CPACK_PACKAGE_CONTACT "${CPACK_PACKAGE_VENDOR}")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Interactive post-processing tool for scanned pages.")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
-set(CPACK_PACKAGE_EXECUTABLES "scantailor;${CMAKE_PROJECT_NAME}")
+set(CPACK_PACKAGE_EXECUTABLES "scantailor;${APPLICATION_DISPLAY_NAME}")
 set(CPACK_CREATE_DESKTOP_LINKS "scantailor")
 if (WIN32)
+  set(CPACK_NSIS_PACKAGE_NAME "${APPLICATION_DISPLAY_NAME}")
+  set(CPACK_NSIS_DISPLAY_NAME "${APPLICATION_DISPLAY_NAME} ${VERSION}")
+  set(CPACK_PACKAGE_INSTALL_DIRECTORY "${APPLICATION_DISPLAY_NAME}")
   set(CPACK_NSIS_INSTALLED_ICON_NAME "scantailor.exe")
-  set(CPACK_NSIS_PACKAGE_NAME "${CMAKE_PROJECT_NAME}")
-  set(CPACK_NSIS_DISPLAY_NAME "${CMAKE_PROJECT_NAME} ${VERSION}")
   set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
-  set(CPACK_NSIS_EXECUTABLES_DIRECTORY "${CMAKE_BINARY_DIR}")
-  set(CPACK_PACKAGE_INSTALL_DIRECTORY "${CMAKE_PROJECT_NAME}")
-  set(CPACK_NSIS_CREATE_ICONS_EXTRA
-      "CreateShortCut \\\"$DESKTOP\\\\${CMAKE_PROJECT_NAME}.lnk\\\" \\\"$INSTDIR\\\\scantailor.exe\\\"")
-  set(CPACK_NSIS_DELETE_ICONS_EXTRA
-      "Delete \\\"$DESKTOP\\\\${CMAKE_PROJECT_NAME}.lnk\\\"")
+
+  # Relative to the installation directory. This was previously the build tree,
+  # which produced Start Menu shortcuts pointing at a path that exists only on
+  # the machine the installer was built on.
+  set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
+
+  set(CPACK_NSIS_MUI_ICON "${SCANTAILOR_RESOURCES_DIR}/win32/scantailor.ico")
+  set(CPACK_NSIS_MUI_UNIICON "${SCANTAILOR_RESOURCES_DIR}/win32/scantailor.ico")
+  set(CPACK_NSIS_CONTACT "${CPACK_PACKAGE_CONTACT}")
+  set(CPACK_NSIS_URL_INFO_ABOUT "${APPLICATION_URL}")
+  set(CPACK_NSIS_HELP_LINK "${APPLICATION_URL}")
+
+  # Bracket arguments below: the NSIS script is passed through verbatim, so the
+  # backslashes and quotes it needs survive without a layer of CMake escaping.
+  # These values make a round trip through CPackConfig.cmake, which CMake parses
+  # again, so every backslash has to be doubled and every quote escaped here to
+  # arrive in the generated NSIS script as a single character.
+  set(CPACK_NSIS_CREATE_ICONS_EXTRA [==[
+    CreateShortCut '$DESKTOP\\Scantailor-DGI.lnk' '$INSTDIR\\scantailor.exe'
+  ]==])
+  set(CPACK_NSIS_DELETE_ICONS_EXTRA [==[
+    Delete '$DESKTOP\\Scantailor-DGI.lnk'
+  ]==])
+
+  # Associate project files so an operator can open a title by double-clicking
+  # it. SHCTX follows the install scope, so a per-machine install registers for
+  # every user and a per-user install only for that one. $\" is the NSIS escape
+  # for a literal quote, needed around a path that may contain spaces.
+  set(CPACK_NSIS_EXTRA_PREINSTALL_COMMANDS [==[
+    ; A file that is in use cannot be overwritten, so check before writing
+    ; any of them rather than failing part-way through with a message about
+    ; some DLL. Overwriting the application while it runs is the single most
+    ; likely reason an upgrade fails, because the operator is usually working
+    ; in it when the update arrives.
+    st_check_running:
+    ClearErrors
+    IfFileExists '$INSTDIR\\scantailor.exe' 0 st_not_running
+    FileOpen $0 '$INSTDIR\\scantailor.exe' a
+    IfErrors 0 st_close_probe
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION 'Scantailor-DGI is still running.$\\r$\\n$\\r$\\nClose it and click Retry to continue the installation.' /SD IDCANCEL IDRETRY st_check_running
+    Abort 'Scantailor-DGI is running. Close it and start the installer again.'
+    st_close_probe:
+    FileClose $0
+    st_not_running:
+  ]==])
+
+  set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS [==[
+    WriteRegStr SHCTX 'Software\\Classes\\.ScanTailor' '' 'ScantailorDGI.Project'
+    WriteRegStr SHCTX 'Software\\Classes\\ScantailorDGI.Project' '' 'Scantailor-DGI Project'
+    WriteRegStr SHCTX 'Software\\Classes\\ScantailorDGI.Project\\DefaultIcon' '' '$INSTDIR\\scantailor.exe,0'
+    WriteRegStr SHCTX 'Software\\Classes\\ScantailorDGI.Project\\shell\\open\\command' '' '$\\\"$INSTDIR\\scantailor.exe$\\\" $\\\"%1$\\\"'
+    System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+  ]==])
+  set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS [==[
+    DeleteRegKey SHCTX 'Software\\Classes\\ScantailorDGI.Project'
+    DeleteRegKey SHCTX 'Software\\Classes\\.ScanTailor'
+    System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+  ]==])
 endif()
 set(CPACK_SOURCE_PACKAGE_FILE_NAME "${APPLICATION_NAME}-${VERSION}")
 set(CPACK_SOURCE_IGNORE_FILES

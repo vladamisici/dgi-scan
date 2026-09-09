@@ -7,6 +7,7 @@
 #include <foundation/Hashes.h>
 
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QWaitCondition>
@@ -398,6 +399,10 @@ void RelinkingModel::StatusUpdateThread::run() try {
 
 catch (const std::bad_alloc&) {
   OutOfMemoryHandler::instance().handleOutOfMemorySituation();
+} catch (const std::exception& e) {
+  qCritical() << "Relinking status thread failed:" << e.what();
+} catch (...) {
+  qCritical() << "Relinking status thread failed with an unknown exception";
 }
 
 /*================================ Item =================================*/

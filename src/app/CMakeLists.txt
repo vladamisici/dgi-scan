@@ -78,5 +78,13 @@ target_include_directories(
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
     "$<TARGET_PROPERTY:TIFF::TIFF,INTERFACE_INCLUDE_DIRECTORIES>")
 install(TARGETS scantailor RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+if (MSVC)
+  # A minidump is unreadable without the .pdb matching that exact build, so the
+  # symbols must be kept - but in their own component, not in the installer the
+  # operators run: the file is tens of megabytes and of no use on their machines.
+  # Package it separately with: cpack -D CPACK_COMPONENTS_ALL=symbols
+  install(FILES "$<TARGET_PDB_FILE:scantailor>"
+      DESTINATION "symbols" COMPONENT symbols EXCLUDE_FROM_ALL OPTIONAL)
+endif()
 
 translation_sources(scantailor ${gui_only_sources} ${gui_only_ui_files})

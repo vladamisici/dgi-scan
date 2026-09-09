@@ -2,6 +2,7 @@
 // Use of this source code is governed by the GNU GPLv3 license that can be found in the LICENSE file.
 
 #include "LinearSolver.h"
+#include <stdexcept>
 
 LinearSolver::LinearSolver(size_t rows_AB, size_t cols_A_rows_X, size_t cols_BX)
     : m_rowsAB(rows_AB), m_colsArowsX(cols_A_rows_X), m_colsBX(cols_BX) {

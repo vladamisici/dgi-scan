@@ -145,7 +145,7 @@
          <string notr="true"/>
         </property>
         <property name="title">
-         <string>Recent Projects</string>
+         <string>Project History</string>
         </property>
         <layout class="QVBoxLayout" name="verticalLayout_3">
          <item>

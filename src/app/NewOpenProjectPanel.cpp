@@ -3,14 +3,29 @@
 
 #include "NewOpenProjectPanel.h"
 
+#include <QDesktopServices>
+#include <QDir>
 #include <QFileInfo>
+#include <QFontMetrics>
+#include <QLabel>
+#include <QMenu>
 #include <QPainter>
+#include <QUrl>
+#include <QVBoxLayout>
 
 #include "ColorSchemeManager.h"
-#include "RecentProjects.h"
 #include "Utils.h"
 
 using namespace core;
+
+namespace {
+/** Dimmed colour for the secondary line of a history entry. */
+QColor secondaryTextColor(const QPalette& palette) {
+  QColor color = ColorSchemeManager::instance().getColorParam("OpenNewProjectText", palette.windowText()).color();
+  color.setAlpha(150);
+  return color;
+}
+}  // namespace
 
 NewOpenProjectPanel::NewOpenProjectPanel(QWidget* parent) : QWidget(parent) {
   setupUi(this);
@@ -18,43 +33,158 @@ NewOpenProjectPanel::NewOpenProjectPanel(QWidget* parent) : QWidget(parent) {
   newProjectLabel->setText(Utils::richTextForLink(newProjectLabel->text()));
   openProjectLabel->setText(Utils::richTextForLink(openProjectLabel->text()));
 
-  RecentProjects rp;
-  rp.read();
-  if (!rp.validate()) {
-    // Some project files weren't found.
-    // Write the list without them.
-    rp.write();
-  }
-  if (rp.isEmpty()) {
-    recentProjectsGroup->setVisible(false);
-  } else {
-    rp.enumerate([this](const QString& filePath) { addRecentProject(filePath); });
-  }
+  m_history.read();
+  populateHistory();
 
   connect(newProjectLabel, SIGNAL(linkActivated(const QString&)), this, SIGNAL(newProject()));
   connect(openProjectLabel, SIGNAL(linkActivated(const QString&)), this, SIGNAL(openProject()));
 }
 
-void NewOpenProjectPanel::addRecentProject(const QString& filePath) {
-  const QFileInfo fileInfo(filePath);
-  QString baseName(fileInfo.completeBaseName());
-  if (baseName.isEmpty()) {
-    baseName = QChar('_');
+void NewOpenProjectPanel::populateHistory() {
+  for (QWidget* row : m_historyRows) {
+    recentProjectsGroup->layout()->removeWidget(row);
+    row->deleteLater();
   }
-  auto* label = new QLabel(recentProjectsGroup);
-  label->setWordWrap(true);
-  label->setTextFormat(Qt::RichText);
-  label->setText(Utils::richTextForLink(baseName, filePath));
-  label->setToolTip(filePath);
+  m_historyRows.clear();
+  if (m_clearHistoryLabel) {
+    recentProjectsGroup->layout()->removeWidget(m_clearHistoryLabel);
+    m_clearHistoryLabel->deleteLater();
+    m_clearHistoryLabel = nullptr;
+  }
 
-  int fontSize = recentProjectsGroup->font().pointSize();
-  QFont widgetFont = label->font();
-  widgetFont.setPointSize(fontSize);
-  label->setFont(widgetFont);
+  recentProjectsGroup->setVisible(true);
 
-  recentProjectsGroup->layout()->addWidget(label);
+  if (m_history.isEmpty()) {
+    // Shown rather than hidden. An empty section that disappears entirely gives
+    // no sign the history exists at all, which reads as the feature being
+    // missing rather than as there being nothing in it yet.
+    auto* empty = new QLabel(recentProjectsGroup);
+    empty->setTextFormat(Qt::PlainText);
+    empty->setText(tr("Projects you open will be listed here."));
+    QFont emptyFont = empty->font();
+    emptyFont.setPointSize(std::max(1, recentProjectsGroup->font().pointSize() - 5));
+    empty->setFont(emptyFont);
+    QPalette emptyPalette = empty->palette();
+    emptyPalette.setColor(QPalette::WindowText, secondaryTextColor(palette()));
+    empty->setPalette(emptyPalette);
+    recentProjectsGroup->layout()->addWidget(empty);
+    m_historyRows.push_back(empty);
+    return;
+  }
 
-  connect(label, SIGNAL(linkActivated(const QString&)), this, SIGNAL(openRecentProject(const QString&)));
+  for (const ProjectHistory::Entry& entry : m_history.entries()) {
+    addHistoryEntry(entry);
+  }
+
+  m_clearHistoryLabel = new QLabel(recentProjectsGroup);
+  m_clearHistoryLabel->setTextFormat(Qt::RichText);
+  m_clearHistoryLabel->setText(Utils::richTextForLink(tr("Clear the list"), QLatin1String("#clear")));
+  QFont clearFont = m_clearHistoryLabel->font();
+  clearFont.setPointSize(std::max(1, recentProjectsGroup->font().pointSize() - 6));
+  m_clearHistoryLabel->setFont(clearFont);
+  connect(m_clearHistoryLabel, &QLabel::linkActivated, this, [this](const QString&) { clearHistory(); });
+  recentProjectsGroup->layout()->addWidget(m_clearHistoryLabel);
+}
+
+void NewOpenProjectPanel::addHistoryEntry(const ProjectHistory::Entry& entry) {
+  const int baseFontSize = recentProjectsGroup->font().pointSize();
+  const bool available = entry.isAvailable();
+
+  auto* row = new QWidget(recentProjectsGroup);
+  auto* rowLayout = new QVBoxLayout(row);
+  rowLayout->setContentsMargins(0, 0, 0, 4);
+  rowLayout->setSpacing(0);
+
+  auto* nameLabel = new QLabel(row);
+  nameLabel->setWordWrap(true);
+  nameLabel->setTextFormat(Qt::RichText);
+  QFont nameFont = nameLabel->font();
+  nameFont.setPointSize(baseFontSize);
+  nameLabel->setFont(nameFont);
+
+  if (available) {
+    nameLabel->setText(Utils::richTextForLink(entry.displayName(), entry.filePath));
+    connect(nameLabel, SIGNAL(linkActivated(const QString&)), this, SIGNAL(openRecentProject(const QString&)));
+  } else {
+    // Kept rather than hidden: a project on a share that happens to be offline
+    // is not a project the operator has finished with.
+    nameLabel->setText(entry.displayName().toHtmlEscaped());
+    nameLabel->setEnabled(false);
+  }
+  rowLayout->addWidget(nameLabel);
+
+  QStringList details;
+  if (entry.pageCount > 0) {
+    details << ((entry.pageCount == 1) ? tr("1 page") : tr("%1 pages").arg(entry.pageCount));
+  }
+  details << entry.lastOpenedDescription();
+  if (!available) {
+    details << tr("not available");
+  }
+
+  // Built from its code point rather than written as a literal: MSVC reads the
+  // source in the local codepage, which turns a middle dot into mojibake.
+  const QString separator = QLatin1String("  ") + QChar(0x00B7) + QLatin1String("  ");
+
+  auto* detailLabel = new QLabel(row);
+  detailLabel->setTextFormat(Qt::PlainText);
+  detailLabel->setText(details.join(separator));
+  QFont detailFont = detailLabel->font();
+  detailFont.setPointSize(std::max(1, baseFontSize - 6));
+  detailLabel->setFont(detailFont);
+  QPalette detailPalette = detailLabel->palette();
+  detailPalette.setColor(QPalette::WindowText, secondaryTextColor(palette()));
+  detailLabel->setPalette(detailPalette);
+  rowLayout->addWidget(detailLabel);
+
+  const QString tooltip = entry.outputDirectory.isEmpty()
+                              ? entry.filePath
+                              : tr("%1\nOutput: %2").arg(entry.filePath, entry.outputDirectory);
+  row->setToolTip(tooltip);
+
+  row->setContextMenuPolicy(Qt::CustomContextMenu);
+  connect(row, &QWidget::customContextMenuRequested, this,
+          [this, entry, row](const QPoint& pos) { showEntryContextMenu(entry, row->mapToGlobal(pos)); });
+
+  recentProjectsGroup->layout()->addWidget(row);
+  m_historyRows.push_back(row);
+}
+
+void NewOpenProjectPanel::showEntryContextMenu(const ProjectHistory::Entry& entry, const QPoint& globalPos) {
+  QMenu menu(this);
+
+  QAction* const openAction = menu.addAction(tr("Open"));
+  openAction->setEnabled(entry.isAvailable());
+
+  QAction* const revealAction = menu.addAction(tr("Open Containing Folder"));
+  revealAction->setEnabled(QFileInfo::exists(QFileInfo(entry.filePath).absolutePath()));
+
+  menu.addSeparator();
+  QAction* const removeAction = menu.addAction(tr("Remove from List"));
+
+  QAction* const chosen = menu.exec(globalPos);
+  if (!chosen) {
+    return;
+  }
+  if (chosen == openAction) {
+    emit openRecentProject(entry.filePath);
+  } else if (chosen == revealAction) {
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(entry.filePath).absolutePath()));
+  } else if (chosen == removeAction) {
+    removeEntry(entry.filePath);
+  }
+}
+
+void NewOpenProjectPanel::removeEntry(const QString& filePath) {
+  m_history.remove(filePath);
+  m_history.write();
+  populateHistory();
+}
+
+void NewOpenProjectPanel::clearHistory() {
+  m_history.clear();
+  m_history.write();
+  populateHistory();
 }
 
 void NewOpenProjectPanel::paintEvent(QPaintEvent*) {

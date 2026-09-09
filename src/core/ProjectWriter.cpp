@@ -9,6 +9,8 @@
 #include <QtXml>
 
 #include "AbstractFilter.h"
+#include "AtomicFileOverwriter.h"
+#include "CrashHandler.h"
 #include "FileNameDisambiguator.h"
 #include "ImageId.h"
 #include "ImageMetadata.h"
@@ -64,7 +66,9 @@ ProjectWriter::ProjectWriter(const std::shared_ptr<ProjectPages>& pageSequence,
 
 ProjectWriter::~ProjectWriter() = default;
 
-bool ProjectWriter::write(const QString& filePath, const std::vector<FilterPtr>& filters) const {
+bool ProjectWriter::write(const QString& filePath,
+                          const std::vector<FilterPtr>& filters,
+                          QString* errorMessage) const {
   QDomDocument doc;
   QDomElement rootEl(doc.createElement("project"));
   doc.appendChild(rootEl);
@@ -87,13 +91,87 @@ bool ProjectWriter::write(const QString& filePath, const std::vector<FilterPtr>&
     filtersEl.appendChild((*it)->saveSettings(*this, doc));
   }
 
-  QFile file(filePath);
-  if (file.open(QIODevice::WriteOnly)) {
-    QTextStream strm(&file);
-    doc.save(strm, 2);
+  // The project is written to a temporary file next to the target and only then
+  // renamed over it. Opening the target directly with QIODevice::WriteOnly - as
+  // this used to do - truncates the existing project the instant the write
+  // begins, so any interruption between that moment and the last byte (a crash,
+  // an out-of-memory kill, a network share dropping out) leaves the operator
+  // with a truncated or empty project and the work of a whole title gone. With a
+  // temp file plus rename, an interrupted save leaves the previous project
+  // untouched: the worst case is losing the current save, not the project.
+  //
+  // Note that the QTextStream codec is deliberately left at its default so the
+  // on-disk encoding stays byte-for-byte what previous versions produced.
+  const auto fail = [errorMessage](const QString& reason) {
+    if (errorMessage) {
+      *errorMessage = reason;
+    }
+    core::CrashHandler::log(QLatin1String("Saving the project failed: ") + reason);
+    return false;
+  };
+
+  // Writing over the target directly. This is what the application always did,
+  // and it carries the risk the atomic write exists to remove - an interruption
+  // leaves a truncated project - so it is only used when the atomic write could
+  // not be completed and the target is known to be untouched.
+  const auto writeInPlace = [&](const QString& why) -> bool {
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+      return fail(QObject::tr("%1; and writing to it directly failed too (%2)").arg(why, file.errorString()));
+    }
+    {
+      QTextStream strm(&file);
+      doc.save(strm, 2);
+      strm.flush();
+      if (strm.status() != QTextStream::Ok) {
+        return fail(QObject::tr("could not write the project data to \"%1\"").arg(filePath));
+      }
+    }
+    if (!file.flush() || (file.error() != QFileDevice::NoError)) {
+      return fail(QObject::tr("could not write \"%1\" (%2)").arg(filePath, file.errorString()));
+    }
+    file.close();
+    core::CrashHandler::log(QLatin1String("Wrote \"") + filePath
+                            + QLatin1String("\" in place, without the usual protection against an interrupted save, "
+                                            "because ")
+                            + why);
     return true;
+  };
+
+  AtomicFileOverwriter overwriter;
+  QIODevice* const device = overwriter.startWriting(filePath);
+  if (!device) {
+    // The atomic write needs permission to create a file in the project's
+    // folder. A share can withhold exactly that while still allowing an
+    // existing file to be modified, and on such a folder the operator would
+    // otherwise be unable to save at all - a certain loss of their work to
+    // avoid a risked one.
+    return writeInPlace(overwriter.errorString());
   }
-  return false;
+
+  {
+    QTextStream strm(device);
+    doc.save(strm, 2);
+    strm.flush();
+    if (strm.status() != QTextStream::Ok) {
+      overwriter.abort();
+      return fail(QObject::tr("could not write the project data to \"%1\"").arg(filePath));
+    }
+  }
+  if (!overwriter.commit()) {
+    // Replacing the target needs the right to delete the file being displaced,
+    // which overwriting it in place never needed - a share, or a retention
+    // agent, can grant one and refuse the other. The data was written
+    // successfully, so retrying directly over the target is sound. A failure at
+    // the writing stage is deliberately not retried this way: the data could not
+    // be written once already, and truncating a good project to try again would
+    // risk destroying it.
+    if (overwriter.failureStage() == AtomicFileOverwriter::FailureStage::Replace) {
+      return writeInPlace(overwriter.errorString());
+    }
+    return fail(overwriter.errorString());
+  }
+  return true;
 }  // ProjectWriter::write
 
 QDomElement ProjectWriter::processDirectories(QDomDocument& doc) const {

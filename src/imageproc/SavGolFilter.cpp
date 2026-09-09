@@ -5,6 +5,7 @@
 
 #include "Grayscale.h"
 #include "SavGolKernel.h"
+#include <stdexcept>
 
 namespace imageproc {
 namespace {

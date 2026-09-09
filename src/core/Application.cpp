@@ -5,12 +5,14 @@
 
 #include <config.h>
 
+#include <QDebug>
 #include <QDir>
 #include <QDirIterator>
 #include <QFontDatabase>
 #include <QTemporaryDir>
 
 #include "OutOfMemoryHandler.h"
+#include <stdexcept>
 
 Application::Application(int& argc, char** argv) : QApplication(argc, argv), m_currentLocale("en") {
   initTranslations();
@@ -23,6 +25,16 @@ bool Application::notify(QObject* receiver, QEvent* e) {
     return QApplication::notify(receiver, e);
   } catch (const std::bad_alloc&) {
     OutOfMemoryHandler::instance().handleOutOfMemorySituation();
+    return false;
+  } catch (const std::exception& e) {
+    // Interactive editing - dragging zone vertices, moving dewarp lines, editing
+    // content boxes - is dispatched through here, and parts of that code throw
+    // std::logic_error by design. Such an exception used to leave the event loop
+    // and terminate the application while the operator was mid-edit.
+    qCritical() << "Unhandled exception during event delivery:" << e.what();
+    return false;
+  } catch (...) {
+    qCritical() << "Unhandled unknown exception during event delivery";
     return false;
   }
 }

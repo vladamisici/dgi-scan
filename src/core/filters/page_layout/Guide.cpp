@@ -4,6 +4,7 @@
 #include "Guide.h"
 
 #include <foundation/Utils.h>
+#include <cmath>
 
 using namespace foundation;
 

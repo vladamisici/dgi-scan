@@ -40,7 +40,19 @@ class Utils {
   /**
    * Unlike QFile::rename(), this one overwrites existing files.
    */
-  static bool overwritingRename(const QString& from, const QString& to);
+  static bool overwritingRename(const QString& from, const QString& to, QString* errorMessage = nullptr);
+
+  /**
+   * \brief The operating system's description of the last error, for reporting.
+   *
+   * Qt does not surface GetLastError, so a failed MoveFileExW would otherwise
+   * be indistinguishable from any other - "access denied" and "the file is in
+   * use" call for completely different answers.
+   */
+  static QString lastSystemErrorString();
+
+  /** \brief Describes a specific system error code. \see lastSystemErrorString() */
+  static QString systemErrorString(unsigned long code);
 
   /**
    * \brief Generate rich text, complete with headers and stuff,

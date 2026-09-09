@@ -1,0 +1,170 @@
+name: Windows
+
+# Produces the artifacts the operators actually install, so a release never
+# depends on one developer's machine being set up correctly.
+on:
+  push:
+    branches: [master, 'resilience/**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    env:
+      QT_VERSION: 5.15.2
+      BUILD_TYPE: Release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: win64_msvc2019_64
+          cache: true
+
+      # Only the small libraries. Qt comes prebuilt above, which keeps the job to
+      # a few minutes rather than rebuilding Qt from source every time.
+      - name: Install dependencies (vcpkg)
+        run: |
+          vcpkg install --triplet x64-windows `
+            tiff libjpeg-turbo libpng zlib `
+            boost-test boost-multi-index boost-lambda boost-foreach `
+            boost-intrusive boost-iterator boost-mpl boost-smart-ptr `
+            boost-array boost-function boost-bind
+
+      # Two configurations, because PORTABLE_VERSION is compiled in. The portable
+      # build keeps settings and crash reports beside the executable; the
+      # installed build puts them in the user profile, which is the only writable
+      # location once the application lives under Program Files.
+      - name: Configure (portable)
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows -DBoost_USE_STATIC_LIBS=OFF `
+            -DBUILD_TESTING=ON -DPORTABLE_VERSION=ON
+
+      - name: Build (portable)
+        run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+      - name: Test
+        working-directory: build
+        run: ctest -C ${{ env.BUILD_TYPE }} --output-on-failure
+
+      - name: Configure (installer)
+        run: |
+          cmake -S . -B build-installer -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows -DBoost_USE_STATIC_LIBS=OFF `
+            -DBUILD_TESTING=OFF -DPORTABLE_VERSION=OFF
+
+      - name: Build (installer)
+        run: cmake --build build-installer --config ${{ env.BUILD_TYPE }} --parallel
+
+      - name: Package
+        run: |
+          # NSIS is on the runner image but not on PATH.
+          $env:PATH += ";${env:ProgramFiles(x86)}\NSIS"
+          cd build
+          cpack -G ZIP -C $env:BUILD_TYPE
+          cpack -G ZIP -C $env:BUILD_TYPE `
+            -D CPACK_COMPONENTS_ALL=symbols `
+            -D CPACK_ARCHIVE_COMPONENT_INSTALL=ON `
+            -D CPACK_PACKAGE_FILE_NAME=symbols-tmp
+          # CPack appends the component name, so the file lands as
+          # "symbols-tmp-symbols.zip". Rename it to match the application
+          # archive, so the two are recognisably the same build.
+          $main = Get-ChildItem scantailor-dgi-*-win64.zip | Select-Object -First 1
+          $base = $main.Name -replace '\.zip$',''
+          Move-Item -Force symbols-tmp-symbols.zip "$base-symbols.zip"
+          cd ../build-installer
+          cpack -G NSIS -C $env:BUILD_TYPE
+
+      # A package that starts and then dies before showing a window is the exact
+      # failure this repository shipped once: the build tree ran fine because the
+      # package manager had deployed the transitive DLLs next to the binary, while
+      # the package itself was missing fourteen of them. Only launching the real
+      # artifact catches it.
+      #
+      # The proof of success is the crash-handler log rather than a window: it is
+      # written from main() once every DLL has loaded and Qt is up, so it says
+      # exactly what we need to know, and unlike a window it does not depend on
+      # the runner having an interactive desktop. A process blocked on a missing
+      # DLL never reaches that line.
+      - name: Smoke test the portable package
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem build/scantailor-dgi-*-win64.zip | Select-Object -First 1
+          Expand-Archive -Path $zip.FullName -DestinationPath smoke
+          $dir = (Get-ChildItem smoke -Directory | Select-Object -First 1).FullName
+          $p = Start-Process -FilePath "$dir/scantailor.exe" -WorkingDirectory $dir -PassThru
+          Start-Sleep -Seconds 25
+          $log = Join-Path $dir "config/crashes/scantailor.log"
+          if (-not (Test-Path $log)) {
+            if ($p.HasExited) { throw "portable build exited with $($p.ExitCode) and wrote no log" }
+            throw "portable build never got through start-up - almost certainly a missing dependency"
+          }
+          Get-Content $log | Write-Host
+          if (-not (Select-String -Path $log -Pattern "started" -Quiet)) { throw "start-up line missing from log" }
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          Write-Host "portable package OK"
+
+      # The runner is administrator, so the installer can be exercised for real:
+      # install silently, run what it installed, check the association, remove it.
+      - name: Smoke test the installer
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem build-installer/scantailor-dgi-*-win64.exe | Select-Object -First 1
+          Start-Process -FilePath $exe.FullName -ArgumentList "/S" -Wait
+          $installed = "$env:ProgramFiles\Scantailor-DGI\scantailor.exe"
+          if (-not (Test-Path $installed)) { throw "installer did not place $installed" }
+
+          $log = "$env:LOCALAPPDATA\scantailor-dgi\scantailor-dgi\crashes\scantailor.log"
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $p = Start-Process -FilePath $installed -PassThru
+          Start-Sleep -Seconds 25
+          if (-not (Test-Path $log)) {
+            if ($p.HasExited) { throw "installed build exited with $($p.ExitCode) and wrote no log" }
+            throw "installed build never got through start-up"
+          }
+          Get-Content $log | Write-Host
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+
+          $assoc = (Get-ItemProperty "HKLM:\Software\Classes\.ScanTailor" -ErrorAction SilentlyContinue).'(default)'
+          if ($assoc -ne "ScantailorDGI.Project") { throw "file association not registered (got '$assoc')" }
+          Write-Host "installer OK, association: $assoc"
+
+          Start-Process -FilePath "$env:ProgramFiles\Scantailor-DGI\Uninstall.exe" -ArgumentList "/S" -Wait
+          Start-Sleep -Seconds 5
+          if (Test-Path $installed) { throw "uninstaller left $installed behind" }
+          Write-Host "uninstall OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scantailor-dgi-installer
+          path: build-installer/scantailor-dgi-*-win64.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scantailor-dgi-portable
+          path: build/scantailor-dgi-*-win64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scantailor-dgi-symbols
+          path: build/scantailor-dgi-*-win64-symbols.zip
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build-installer/scantailor-dgi-*-win64.exe
+            build/scantailor-dgi-*-win64.zip
+            build/scantailor-dgi-*-win64-symbols.zip

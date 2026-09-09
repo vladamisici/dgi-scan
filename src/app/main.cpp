@@ -6,11 +6,13 @@
 #include <core/ApplicationSettings.h>
 #include <core/ColorSchemeFactory.h>
 #include <core/ColorSchemeManager.h>
+#include <core/CrashHandler.h>
 #include <core/FontIconPack.h>
 #include <core/IconProvider.h>
 #include <core/StyledIconPack.h>
 
 #include <QSettings>
+#include <QStandardPaths>
 #include <QStringList>
 
 #include "MainWindow.h"
@@ -38,6 +40,16 @@ int main(int argc, char* argv[]) {
   }
   QSettings settings;
 
+  // Installed before any project is touched. Until now a crash - most often an
+  // exception escaping a worker thread - killed the process without a dialog,
+  // without a log line and without a dump, which is why "it just closes" reports
+  // were impossible to act on. From here on every such death leaves a minidump
+  // and a log entry behind.
+  core::CrashHandler::install(app.isPortableVersion()
+                                  ? app.getPortableConfigPath() + QLatin1String("/crashes")
+                                  : QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
+                                        + QLatin1String("/crashes"));
+
   app.installLanguage(ApplicationSettings::getInstance().getLanguage());
 
   {
@@ -58,6 +70,12 @@ int main(int argc, char* argv[]) {
 
   if (args.size() > 1) {
     mainWnd->openProject(args.at(1));
+  } else {
+    // Only when no project was named on the command line. openProject() is not
+    // synchronous - it can put up the Fix DPI dialog and finish later - so
+    // testing "is a project loaded yet" here would not be a reliable guard.
+    mainWnd->offerUnsavedSessionRecovery();
   }
+
   return Application::exec();
 }  // main

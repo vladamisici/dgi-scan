@@ -4,6 +4,7 @@
 #include "OptionsWidget.h"
 
 #include <QToolTip>
+#include <cmath>
 #include <utility>
 
 #include "../../Utils.h"

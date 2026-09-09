@@ -8,6 +8,7 @@
 
 #include "ImageViewBase.h"
 #include "ZoneInteractionContext.h"
+#include <cmath>
 
 ZoneVertexDragInteraction::ZoneVertexDragInteraction(ZoneInteractionContext& context,
                                                      InteractionState& interaction,

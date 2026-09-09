@@ -1,0 +1,13 @@
+build/
+build-tests/
+build-fresh/
+build-installer/
+build*/
+
+# IDE
+.idea/
+.vscode/
+CMakeLists.txt.user*
+cmake-build-*/
+Qt-official/
+*.autosave

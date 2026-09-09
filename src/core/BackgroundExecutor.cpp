@@ -4,6 +4,7 @@
 #include "BackgroundExecutor.h"
 
 #include <QCoreApplication>
+#include <QDebug>
 #include <QThread>
 #include <cassert>
 
@@ -75,6 +76,13 @@ void BackgroundExecutor::Dispatcher::customEvent(QEvent* event) {
     }
   } catch (const std::bad_alloc&) {
     OutOfMemoryHandler::instance().handleOutOfMemorySituation();
+  } catch (const std::exception& e) {
+    // This runs on a dedicated QThread; an escaping exception would unwind out
+    // of the event loop and terminate the whole process. See the equivalent
+    // handler in WorkerThreadPool::submitTask.
+    qCritical() << "Background executor task failed:" << e.what();
+  } catch (...) {
+    qCritical() << "Background executor task failed with an unknown exception";
   }
 }
 

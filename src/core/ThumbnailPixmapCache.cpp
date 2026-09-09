@@ -149,6 +149,8 @@ class ThumbnailPixmapCache::Impl : public QThread {
 
   void postLoadResult(const LoadQueue::iterator& lqIt, const QImage& image, ThumbnailLoadResult::Status status);
 
+  bool retireFailedItem(const LoadQueue::iterator& lqIt, bool itemInProgress);
+
   void processLoadResult(LoadResultEvent* result);
 
   void removeExcessLocked();
@@ -432,20 +434,24 @@ ThumbnailPixmapCache::Status ThumbnailPixmapCache::Impl::request(
 }  // ThumbnailPixmapCache::Impl::request
 
 void ThumbnailPixmapCache::Impl::ensureThumbnailExists(const ImageId& imageId, const QImage& image) {
-  if (m_shuttingDown) {
-    return;
-  }
-
   if (image.isNull()) {
     return;
   }
 
   QMutexLocker locker(&m_mutex);
+  // m_shuttingDown is written by the GUI thread and read here from a worker, so
+  // it has to be read under the same mutex as the other members.
+  if (m_shuttingDown) {
+    return;
+  }
   const QString thumbDir(m_thumbDir);
   const QSize maxThumbSize(m_maxThumbSize);
   locker.unlock();
 
-  const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, m_maxThumbSize));
+  // The local copy, not the member: the member can change under us between here
+  // and makeThumbnail() below, which would name the file after one size and
+  // store an image scaled to another.
+  const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, maxThumbSize));
   if (QFile::exists(thumbFilePath)) {
     return;
   }
@@ -460,20 +466,20 @@ void ThumbnailPixmapCache::Impl::ensureThumbnailExists(const ImageId& imageId, c
 }
 
 void ThumbnailPixmapCache::Impl::recreateThumbnail(const ImageId& imageId, const QImage& image) {
-  if (m_shuttingDown) {
-    return;
-  }
-
   if (image.isNull()) {
     return;
   }
 
   QMutexLocker locker(&m_mutex);
+  if (m_shuttingDown) {
+    return;
+  }
   const QString thumbDir(m_thumbDir);
   const QSize maxThumbSize(m_maxThumbSize);
   locker.unlock();
 
-  const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, m_maxThumbSize));
+  // See the note in ensureThumbnailExists() on using the local copy here.
+  const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, maxThumbSize));
   const QImage thumbnail(makeThumbnail(image, maxThumbSize));
   bool thumbWritten = false;
 
@@ -529,9 +535,12 @@ void ThumbnailPixmapCache::Impl::backgroundProcessing() {
   assert(QCoreApplication::instance()->thread() != QThread::currentThread());
 
   while (true) {
+    // Declared out here so the handlers below can retire the in-flight item.
+    LoadQueue::iterator lqIt;
+    bool itemInProgress = false;
+
     try {
       // We are going to initialize these while holding the mutex.
-      LoadQueue::iterator lqIt;
       ImageId imageId;
       QString thumbDir;
       QSize maxThumbSize;
@@ -558,6 +567,7 @@ void ThumbnailPixmapCache::Impl::backgroundProcessing() {
         // from being processed again before the GUI thread
         // receives our LoadResultEvent.
         queuedToInProgress(lqIt);
+        itemInProgress = true;
 
         if (m_totalLoadAttempts - lqIt->precedingLoadAttempts > m_expirationThreshold) {
           // Expire this request.  The reasoning behind
@@ -583,9 +593,45 @@ void ThumbnailPixmapCache::Impl::backgroundProcessing() {
       postLoadResult(lqIt, image, status);
     } catch (const std::bad_alloc&) {
       OutOfMemoryHandler::instance().handleOutOfMemorySituation();
+      if (!retireFailedItem(lqIt, itemInProgress)) {
+        break;
+      }
+    } catch (const std::exception& e) {
+      // A truncated TIFF, or a share that disappears mid-read, makes the loaders
+      // throw; that used to terminate the process from this thread.
+      qCritical() << "Thumbnail loading failed:" << e.what();
+      if (!retireFailedItem(lqIt, itemInProgress)) {
+        break;
+      }
+    } catch (...) {
+      qCritical() << "Thumbnail loading failed with an unknown exception";
+      if (!retireFailedItem(lqIt, itemInProgress)) {
+        break;
+      }
     }
   }
 }  // ThumbnailPixmapCache::Impl::backgroundProcessing
+
+/**
+ * \brief Reports a failed load so the item leaves the IN_PROGRESS state.
+ *
+ * Only postLoadResult() ever moves an item out of IN_PROGRESS. Returning from a
+ * handler without doing so would strand the item forever: its completion
+ * handlers would never run, request() would keep returning QUEUED for it without
+ * ever waking this thread again, and the handler vector would grow without
+ * bound. LOAD_FAILED is exactly the status this case exists for.
+ *
+ * \return true if an item was retired, and therefore the loop is guaranteed to
+ *         have made progress and may safely continue. False means the failure
+ *         happened before any item was claimed, where continuing would spin.
+ */
+bool ThumbnailPixmapCache::Impl::retireFailedItem(const LoadQueue::iterator& lqIt, bool itemInProgress) {
+  if (!itemInProgress) {
+    return false;
+  }
+  postLoadResult(lqIt, QImage(), ThumbnailLoadResult::LOAD_FAILED);
+  return true;
+}
 
 QImage ThumbnailPixmapCache::Impl::loadSaveThumbnail(const ImageId& imageId,
                                                      const QString& thumbDir,

@@ -10,24 +10,30 @@
 #include <QSurfaceFormat>
 
 bool OpenGLSupport::supported() {
-  QSurfaceFormat format;
-  format.setSamples(2);
-  format.setAlphaBufferSize(8);
+  // Memoised. This used to build and tear down a real QOpenGLContext on every
+  // ImageViewBase construction - that is, on every page and every stage change.
+  // The answer cannot change during a run, and repeatedly creating contexts
+  // against a remote-desktop or software GL stack is both slow and a needless
+  // source of driver-level failures. Thread-safe initialisation is guaranteed by
+  // the C++ rules for function-local statics.
+  static const bool isSupported = [] {
+    QSurfaceFormat format;
+    format.setSamples(2);
+    format.setAlphaBufferSize(8);
 
-  QOpenGLContext context;
-  context.setFormat(format);
-  if (!context.create()) {
-    return false;
-  }
-  format = context.format();
+    QOpenGLContext context;
+    context.setFormat(format);
+    if (!context.create()) {
+      return false;
+    }
+    format = context.format();
 
-  if (format.samples() < 2) {
-    return false;
-  }
-  if (!format.hasAlpha()) {
-    return false;
-  }
-  return true;
+    if (format.samples() < 2) {
+      return false;
+    }
+    return format.hasAlpha();
+  }();
+  return isSupported;
 }
 
 QString OpenGLSupport::deviceName() {

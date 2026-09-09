@@ -27,6 +27,7 @@
 #include "ScopedIncDec.h"
 #include "UnitsProvider.h"
 #include "Utils.h"
+#include <cmath>
 
 using namespace core;
 using namespace imageproc;

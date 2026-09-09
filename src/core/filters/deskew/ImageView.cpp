@@ -14,6 +14,7 @@
 #include <boost/bind.hpp>
 
 #include "ImagePresentation.h"
+#include <cmath>
 
 namespace deskew {
 const double ImageView::m_maxRotationDeg = 45.0;
