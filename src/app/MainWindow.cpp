@@ -2050,11 +2050,17 @@ bool MainWindow::closeProjectInteractive() {
   }
 
   switch (promptProjectSave()) {
-    case SAVE:
-      if (!Utils::overwritingRename(backupFilePath, m_projectFile)) {
-        QMessageBox::warning(this, tr("Error"), tr("Error saving the project file!"));
+    case SAVE: {
+      QString renameError;
+      if (!Utils::overwritingRename(backupFilePath, m_projectFile, &renameError)) {
+        QMessageBox::warning(this, tr("Error"),
+                             renameError.isEmpty()
+                                 ? tr("Error saving the project file!")
+                                 : tr("Error saving the project file!\n\nCould not replace '%1' (%2)")
+                                       .arg(m_projectFile, renameError));
         return false;
       }
+    }
       // fall through
     case DONT_SAVE:
       QFile::remove(backupFilePath);
