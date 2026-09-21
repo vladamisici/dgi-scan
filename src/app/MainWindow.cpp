@@ -387,13 +387,11 @@ void MainWindow::switchToNewProject(const std::shared_ptr<ProjectPages>& pages,
                                     const ProjectReader* projectReader) {
   stopBatchProcessing(CLEAR_MAIN_AREA);
   m_interactiveQueue->cancelAndClear();
-  // Everything below replaces m_pages, m_stages and the thumbnail cache. A task
-  // still running holds shared_ptrs into the outgoing objects, so letting it
-  // finish afterwards means a worker thread can end up dropping the last
-  // reference to GUI-owned objects - QWidgets among them - and destroying them
-  // off the GUI thread. The tasks have just been cancelled, so this returns
-  // promptly.
-  m_workerThreadPool->shutdown();
+  // Everything below replaces m_pages, m_stages and the thumbnail cache, which
+  // running tasks still hold references to. The GUI thread keeps its own
+  // reference to the outgoing set rather than waiting for those tasks to notice
+  // they have been cancelled.
+  retireProjectObjects();
 
   if (!outDir.isEmpty()) {
     Utils::maybeCreateCacheDir(outDir);
@@ -693,9 +691,15 @@ bool MainWindow::compareFiles(const QString& fpath1, const QString& fpath2) {
   while (true) {
     const QByteArray chunk1(file1.read(chunkSize));
     const QByteArray chunk2(file2.read(chunkSize));
-    if (chunk1.size() != chunk2.size()) {
+    // The contents, not just the lengths. Comparing only the sizes - which is
+    // what this did - made every pair of equally long files compare equal, so a
+    // recovery snapshot holding different work from the project was discarded as
+    // redundant, and closing a project that had changed without changing length
+    // skipped the save prompt entirely.
+    if (chunk1 != chunk2) {
       return false;
-    } else if (chunk1.size() == 0) {
+    }
+    if (chunk1.isEmpty()) {
       return true;
     }
   }
@@ -1556,8 +1560,7 @@ void MainWindow::fixedDpiSubmitted() {
 }
 
 /**
- * 
-eturn true if the project was actually written.
+ * \return true if the project was actually written.
  *
  * The result matters to closeProjectInteractive(), which used to ignore it and
  * then discard the project regardless - so answering "Save" and then cancelling
@@ -1575,8 +1578,7 @@ bool MainWindow::saveProjectTriggered() {
   return true;
 }
 
-/** 
-eturn true if the project was actually written. \see saveProjectTriggered() */
+/** \return true if the project was actually written. \see saveProjectTriggered() */
 bool MainWindow::saveProjectAsTriggered() {
   // XXX: this function is duplicated in OutOfMemoryDialog.
 
@@ -2515,6 +2517,45 @@ void MainWindow::updateAutoSaveTimer() {
   if (!m_autoSaveTimer.isActive() || (m_autoSaveTimer.interval() != intervalMs)) {
     m_autoSaveTimer.start(intervalMs);
   }
+}
+
+/**
+ * \brief Parks the objects a project switch is replacing until the workers let go.
+ *
+ * \see MainWindow::retireProjectObjects() in the header for why the GUI thread must
+ * not be the one to wait.
+ */
+void MainWindow::retireProjectObjects() {
+  if (m_pages) {
+    m_retiredProjectObjects.push_back(m_pages);
+  }
+  if (m_stages) {
+    m_retiredProjectObjects.push_back(m_stages);
+  }
+  if (m_thumbnailCache) {
+    m_retiredProjectObjects.push_back(m_thumbnailCache);
+  }
+
+  // Immediately, so that the usual case - nothing running - costs one check and
+  // frees everything on the spot. Retiring without arming this would leave a
+  // whole project's stages and thumbnail cache alive until the next project
+  // switch, which on a machine short of memory is its own problem.
+  releaseRetiredProjectObjects();
+}
+
+void MainWindow::releaseRetiredProjectObjects() {
+  if (m_retiredProjectObjects.empty()) {
+    return;
+  }
+  if (!m_workerThreadPool->isIdle()) {
+    // Still in use. Come back for them rather than either blocking here or
+    // dropping the last reference while a worker is mid-task - the tasks have
+    // been cancelled, so this is a short wait that costs the operator nothing
+    // because it does not happen on the GUI thread's critical path.
+    QTimer::singleShot(500, this, &MainWindow::releaseRetiredProjectObjects);
+    return;
+  }
+  m_retiredProjectObjects.clear();
 }
 
 PageSequence MainWindow::currentPageSequence() {

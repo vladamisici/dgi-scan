@@ -28,6 +28,15 @@ class WorkerThreadPool : public QObject {
    */
   void shutdown();
 
+  /**
+   * \brief Whether every worker has finished.
+   *
+   * Lets the GUI thread find out that outstanding tasks are done without
+   * waiting for them. shutdown() answers the same question by blocking, which
+   * is only acceptable while the application is already on its way out.
+   */
+  bool isIdle() const;
+
   bool hasSpareCapacity() const;
 
   void submitTask(const BackgroundTaskPtr& task);

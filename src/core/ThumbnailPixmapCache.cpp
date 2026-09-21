@@ -458,10 +458,15 @@ void ThumbnailPixmapCache::Impl::ensureThumbnailExists(const ImageId& imageId, c
 
   const QImage thumbnail(makeThumbnail(image, maxThumbSize));
 
+  // Buffered, not durable. A thumbnail is a cache entry the application
+  // regenerates from the source image whenever it is missing, so there is
+  // nothing here worth a flush barrier - and the barrier is not cheap: it makes
+  // the drive commit its write cache, which on a mechanical disk or a network
+  // share costs tens of milliseconds, paid once per page of every title.
   AtomicFileOverwriter overwriter;
   QIODevice* iodev = overwriter.startWriting(thumbFilePath);
   if (iodev && thumbnail.save(iodev, "PNG")) {
-    overwriter.commit();
+    overwriter.commit(AtomicFileOverwriter::Durability::Buffered);
   }
 }
 
@@ -487,7 +492,8 @@ void ThumbnailPixmapCache::Impl::recreateThumbnail(const ImageId& imageId, const
   AtomicFileOverwriter overwriter;
   QIODevice* iodev = overwriter.startWriting(thumbFilePath);
   if (iodev && thumbnail.save(iodev, "PNG")) {
-    thumbWritten = overwriter.commit();
+    // See the note in ensureThumbnailExists() on why this is not durable.
+    thumbWritten = overwriter.commit(AtomicFileOverwriter::Durability::Buffered);
   } else {
     overwriter.abort();
   }

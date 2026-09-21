@@ -43,12 +43,37 @@ class AtomicFileOverwriter {
   QIODevice* startWriting(const QString& filePath);
 
   /**
+   * \brief How hard to insist the bytes have reached the storage device.
+   */
+  enum class Durability {
+    /**
+     * Hand the data to the operating system and rename. What every version of
+     * this class did before durability was a choice, and the right answer for
+     * anything the application can simply rebuild.
+     */
+    Buffered,
+    /**
+     * Additionally ask the device to commit the data before the rename, and
+     * fail the save if it says it could not. For the operator's own work,
+     * where the cost of the barrier is worth paying once per save.
+     */
+    Durable
+  };
+
+  /**
    * \brief Replaces the target file with the temporary one.
    *
    * If replacing failed, false is returned and the temporary file
    * is removed.
+   *
+   * \param durability Whether to force a flush barrier before the rename, and
+   *        to retry a rename that a scanner or indexer is momentarily blocking.
+   *        Both cost real time - a barrier makes a slow disk commit its write
+   *        cache, and the retries sleep - which is worth it for the project
+   *        file and pure waste for a regenerable cache. Defaulted to Durable so
+   *        that a caller has to think before weakening the guarantee.
    */
-  bool commit();
+  bool commit(Durability durability = Durability::Durable);
 
   /**
    * \brief Removes the temporary file without touching the target one.

@@ -11,3 +11,6 @@ CMakeLists.txt.user*
 cmake-build-*/
 Qt-official/
 *.autosave
+
+# Left behind by the Qt installer when a build is run by hand.
+aqtinstall.log

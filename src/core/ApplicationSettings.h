@@ -37,6 +37,11 @@ class ApplicationSettings {
    *
    * Applies both to the autosave that overwrites the project file (when that is
    * enabled) and to the crash-recovery snapshot. Clamped to a sane range on read.
+   *
+   * The write runs on the GUI thread, because it reads the very filter settings
+   * the operator is editing, so each one is a brief pause - noticeable on a slow
+   * machine with the project on a network share. The default is the compromise
+   * between that and how much work an interrupted session may cost.
    */
   int getAutoSaveIntervalSec() const;
 

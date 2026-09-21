@@ -329,6 +329,26 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void updateAutoSaveTimer();
 
+  /**
+   * \brief Parks the objects a project switch is replacing until the workers let go.
+   *
+   * m_pages, m_stages and the thumbnail cache are shared with running background
+   * tasks. Simply reassigning them can leave a worker holding the last reference
+   * and therefore destroying them - QWidgets among them, since every filter owns
+   * its options widget - on a worker thread, which is undefined behaviour.
+   *
+   * The GUI thread keeps its own reference instead, so no worker can ever be the
+   * last owner, and drops it once the pool reports itself idle. This replaces
+   * blocking the GUI thread on the pool: that froze the window for as long as
+   * the page being processed took to notice it had been cancelled - seconds on a
+   * slower machine, and up to the fifteen-second cap - and still carried on
+   * regardless once the cap expired, so it never actually guaranteed what it
+   * cost so much to wait for.
+   */
+  void retireProjectObjects();
+
+  void releaseRetiredProjectObjects();
+
   PageSequence currentPageSequence();
 
   void setupIcons();
@@ -339,6 +359,8 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   QString m_projectFile;
   OutputFileNameGenerator m_outFileNameGen;
   std::shared_ptr<ThumbnailPixmapCache> m_thumbnailCache;
+  /** \see retireProjectObjects() */
+  std::vector<std::shared_ptr<void>> m_retiredProjectObjects;
   std::unique_ptr<ThumbnailSequence> m_thumbSequence;
   std::unique_ptr<WorkerThreadPool> m_workerThreadPool;
   std::unique_ptr<ProcessingTaskQueue> m_batchQueue;

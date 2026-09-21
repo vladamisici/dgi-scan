@@ -43,6 +43,10 @@ void WorkerThreadPool::shutdown() {
   }
 }
 
+bool WorkerThreadPool::isIdle() const {
+  return m_pool->activeThreadCount() == 0;
+}
+
 bool WorkerThreadPool::hasSpareCapacity() const {
   return m_pool->activeThreadCount() < m_pool->maxThreadCount();
 }

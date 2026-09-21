@@ -11,7 +11,7 @@
 const bool ApplicationSettings::DEFAULT_OPENGL_STATE = false;
 const QString ApplicationSettings::DEFAULT_COLOR_SCHEME = "dark";
 const bool ApplicationSettings::DEFAULT_AUTO_SAVE_PROJECT = true;
-const int ApplicationSettings::DEFAULT_AUTO_SAVE_INTERVAL_SEC = 120;
+const int ApplicationSettings::DEFAULT_AUTO_SAVE_INTERVAL_SEC = 300;
 const bool ApplicationSettings::DEFAULT_CRASH_RECOVERY = true;
 const int ApplicationSettings::DEFAULT_TIFF_BW_COMPRESSION = COMPRESSION_CCITTFAX4;
 const int ApplicationSettings::DEFAULT_TIFF_COLOR_COMPRESSION = COMPRESSION_LZW;

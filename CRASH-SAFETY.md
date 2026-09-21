@@ -56,7 +56,7 @@ four-thread machine that is most of a gigabyte of pure waste.
   `fsync`), and only then renames it into place. An interrupted save now costs
   the save, not the project. Write errors are detected and reported instead of
   being silently swallowed. The same applies to default-parameter profiles.
-- **Autosave is on by default**, every 2 minutes (configurable, 15 s–1 h), on a
+- **Autosave is on by default**, every 5 minutes (configurable, 15 s–1 h), on a
   repeating timer that runs for as long as a project is open.
 - **A crash-recovery snapshot** is kept beside the project as
   `<project>.ScanTailor.autosave`. It is written on the same timer and when
@@ -125,6 +125,37 @@ addresses. Optimisation settings are unchanged (`/Zi` plus `/DEBUG /OPT:REF
   switching drains the worker pool so GUI-owned objects are never destroyed on a
   worker thread.
 
+### The window stays responsive
+
+The first round of this work introduced three ways to stall the interface. They
+were invisible on a developer machine and obvious on an operator's, which is why
+they reached the field:
+
+- **Switching or closing a project blocked the GUI thread on the worker pool.**
+  Replacing the project's pages, stages and thumbnail cache while a task still
+  holds references to them risks a worker destroying GUI-owned objects, so the
+  switch waited for the pool to drain - up to a fifteen-second cap, during which
+  the window does not repaint and Windows offers to kill it. The wait was also
+  pointless: once the cap expired it carried on regardless, so it never actually
+  guaranteed what it cost. The GUI thread now keeps its own reference to the
+  outgoing objects instead, so no worker can be the last owner, and drops it from
+  a timer once the pool reports itself idle. Nothing blocks.
+- **The durability barrier was being applied to the thumbnail cache.**
+  `AtomicFileOverwriter` gained a `FlushFileBuffers` before its rename, which is
+  right for the operator's project and wrong for a cache the application
+  regenerates on demand: it makes the drive commit its write cache, tens of
+  milliseconds on a mechanical disk or a share, once per page of every title.
+  `commit()` now takes a `Durability`, and the thumbnail cache asks for
+  `Buffered`.
+- **A blocked rename slept on the calling thread for every file.** The retry
+  loop that waits out a virus scanner is worth up to half a second for a project
+  file and worth nothing for a thumbnail. It is now selected by the same
+  `Durability`, via `Utils::RenameRetry`.
+
+Autosave remains the one deliberate pause: it serialises the project on the GUI
+thread, because it reads the filter settings the operator is editing. That is why
+the default interval is five minutes rather than two.
+
 ### Memory
 
 - Display-only data — the RGB32 `DespeckleState`, the full-resolution images and
@@ -145,7 +176,7 @@ addresses. Optimisation settings are unchanged (`/Zi` plus `/DEBUG /OPT:REF
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `auto_save_project` | on | Autosave writes the project file itself |
-| `auto_save_interval_sec` | 120 | Applies to both autosave and snapshots |
+| `auto_save_interval_sec` | 300 | Applies to both autosave and snapshots |
 | `crash_recovery` | on | Keep a recovery snapshot beside the project |
 
 ## Recovering the affected titles
@@ -153,7 +184,7 @@ addresses. Optimisation settings are unchanged (`/Zi` plus `/DEBUG /OPT:REF
 For titles already damaged, in order:
 
 1. Look for `<project>.ScanTailor.autosave` beside the project — on this build it
-   is written every two minutes, so it holds the session up to shortly before the
+   is written every five minutes, so it holds the session up to shortly before the
    crash. Opening the project offers it automatically.
 2. Look for `Backup.<project>.ScanTailor`, which older builds wrote when closing.
 3. Check `crashes/scantailor.log` and the `.txt` next to any `.dmp` to find out

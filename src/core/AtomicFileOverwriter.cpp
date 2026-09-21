@@ -100,7 +100,7 @@ QIODevice* AtomicFileOverwriter::startWriting(const QString& filePath) {
   return m_tempFile.get();
 }
 
-bool AtomicFileOverwriter::commit() {
+bool AtomicFileOverwriter::commit(const Durability durability) {
   if (!m_tempFile) {
     m_errorString = QObject::tr("nothing was being written");
     m_failureStage = FailureStage::Write;
@@ -120,7 +120,7 @@ bool AtomicFileOverwriter::commit() {
     m_errorString = QObject::tr("could not write \"%1\" (%2)").arg(tempFilePath, m_tempFile->errorString());
     m_failureStage = FailureStage::Write;
   }
-  if (written) {
+  if (written && (durability == Durability::Durable)) {
     switch (syncToDisk(*m_tempFile)) {
       case SyncResult::Synced:
         break;
@@ -152,7 +152,9 @@ bool AtomicFileOverwriter::commit() {
   }
 
   QString renameError;
-  if (!Utils::overwritingRename(tempFilePath, targetPath, &renameError)) {
+  if (!Utils::overwritingRename(tempFilePath, targetPath, &renameError,
+                                (durability == Durability::Durable) ? Utils::RenameRetry::Retry
+                                                                   : Utils::RenameRetry::Once)) {
     m_errorString
         = QObject::tr("could not replace \"%1\" with the file just written (%2)").arg(targetPath, renameError);
     m_failureStage = FailureStage::Replace;

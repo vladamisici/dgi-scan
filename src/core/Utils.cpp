@@ -19,15 +19,25 @@
 #endif
 
 namespace core {
-bool Utils::overwritingRename(const QString& from, const QString& to, QString* errorMessage) {
+bool Utils::overwritingRename(const QString& from,
+                              const QString& to,
+                              QString* errorMessage,
+                              const RenameRetry retry) {
 #ifdef Q_OS_WIN
-  // Retried briefly. A virus scanner, the search indexer or a backup agent that
-  // holds either file open for a moment without sharing delete access makes the
-  // replace fail transiently, and giving up on the first attempt would turn a
-  // momentary lock into a lost save.
+  // Retried briefly, for a RenameRetry::Retry caller. A virus scanner, the search
+  // indexer or a backup agent that holds either file open for a moment without
+  // sharing delete access makes the replace fail transiently, and giving up on
+  // the first attempt would turn a momentary lock into a lost save.
+  //
+  // The retries sleep on the calling thread, so they are not for free and not
+  // for everyone: a RenameRetry::Once caller is writing something it can simply
+  // produce again, and would be paying up to half a second of the GUI thread - or
+  // of a worker - per file to save something disposable.
   static const int delaysMs[] = {0, 30, 60, 120, 240};
+  const int attempts = (retry == RenameRetry::Retry) ? static_cast<int>(sizeof(delaysMs) / sizeof(delaysMs[0])) : 1;
   unsigned long error = 0;
-  for (const int delay : delaysMs) {
+  for (int i = 0; i < attempts; ++i) {
+    const int delay = delaysMs[i];
     if (delay > 0) {
       ::Sleep(delay);
     }
@@ -50,6 +60,9 @@ bool Utils::overwritingRename(const QString& from, const QString& to, QString* e
   }
   return false;
 #else
+  // rename(2) is atomic and does not fail for a concurrent reader, so there is
+  // nothing here that retrying would help with.
+  (void) retry;
   if (rename(QFile::encodeName(from).data(), QFile::encodeName(to).data()) == 0) {
     if (errorMessage) {
       errorMessage->clear();
