@@ -52,6 +52,7 @@ class PageOrientationPropagator;
 class ProjectCreationContext;
 class ProjectOpeningContext;
 class QSessionManager;
+class QLockFile;
 class CompositeCacheDrivenTask;
 class TabbedDebugImages;
 class ProcessingTaskQueue;
@@ -281,6 +282,8 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void closeProjectWithoutSaving();
 
+  void releaseUnsavedSession();
+
   bool saveProjectWithFeedback(const QString& projectFile);
 
   /**
@@ -390,6 +393,10 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   int m_ignoreAutoSave;
   /** Whether this run may write the shared unsaved-session snapshot. */
   bool m_unsavedSessionOwned;
+  // Held while this instance is using the per-user unsaved-session snapshot, so
+  // that another running instance does not mistake it for one left by a crash.
+  std::unique_ptr<QLockFile> m_unsavedSessionLock;
+  bool m_unsavedSessionBusyLogged;
   QTimer m_autoSaveTimer;
   StatusBarPanel* m_statusBarPanel;
   QActionGroup* m_unitsMenuActionGroup;

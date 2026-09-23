@@ -1,7 +1,8 @@
 set(sources
     main.cpp
     TestContentSpanFinder.cpp
-    TestSmartFilenameOrdering.cpp)
+    TestSmartFilenameOrdering.cpp
+    TestProjectRecovery.cpp)
 
 add_executable(core_tests ${sources})
 target_link_libraries(

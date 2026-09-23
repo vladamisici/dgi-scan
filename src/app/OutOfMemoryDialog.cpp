@@ -4,12 +4,14 @@
 #include "OutOfMemoryDialog.h"
 
 #include <QFileDialog>
+#include <QLockFile>
 #include <QMessageBox>
 #include <QSettings>
 #include <utility>
 
 #include "ProjectWriter.h"
 #include "ProjectHistory.h"
+#include "ProjectRecovery.h"
 
 OutOfMemoryDialog::OutOfMemoryDialog(QWidget* parent) : QDialog(parent) {
   ui.setupUi(this);
@@ -69,6 +71,14 @@ void OutOfMemoryDialog::saveProjectAs() {
   }
 
   if (saveProjectWithFeedback(projectFile)) {
+    if (m_projectFile.isEmpty()) {
+      // The work of the unnamed session is now in a real project file. Left in
+      // place, its snapshot would make the next start report a crash and offer
+      // to restore work that was in fact saved.
+      if (std::unique_ptr<QLockFile> lock = core::ProjectRecovery::claimUnsavedSession()) {
+        core::ProjectRecovery::discardUnsavedSession();
+      }
+    }
     m_projectFile = projectFile;
     showSaveSuccessScreen();
 

@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLockFile>
 #include <QStandardPaths>
 
 namespace core {
@@ -114,6 +115,37 @@ QString ProjectRecovery::preserveUnsavedSession() {
     }
   }
   return QString();
+}
+
+bool ProjectRecovery::isUnsavedSessionPath(const QString& path) {
+  const QString sessionPath = unsavedSessionPath();
+  if (path.isEmpty() || sessionPath.isEmpty()) {
+    return false;
+  }
+  const QString a = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+  const QString b = QDir::cleanPath(QFileInfo(sessionPath).absoluteFilePath());
+#ifdef Q_OS_WIN
+  return a.compare(b, Qt::CaseInsensitive) == 0;
+#else
+  return a == b;
+#endif
+}
+
+std::unique_ptr<QLockFile> ProjectRecovery::claimUnsavedSession() {
+  const QString path = unsavedSessionPath();
+  if (path.isEmpty()) {
+    return nullptr;
+  }
+  QDir().mkpath(QFileInfo(path).absolutePath());
+
+  auto lock = std::make_unique<QLockFile>(path + QLatin1String(".lock"));
+  // Staleness by age alone would hand the lock to a second instance after 30
+  // seconds while the first is still running. Only a dead owner makes it stale.
+  lock->setStaleLockTime(0);
+  if (!lock->tryLock(0)) {
+    return nullptr;
+  }
+  return lock;
 }
 
 bool ProjectRecovery::discardSnapshot(const QString& projectFilePath) {

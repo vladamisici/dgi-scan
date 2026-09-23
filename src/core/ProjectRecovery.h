@@ -6,6 +6,9 @@
 
 #include <QDateTime>
 #include <QString>
+#include <memory>
+
+class QLockFile;
 
 namespace core {
 /**
@@ -94,6 +97,31 @@ class ProjectRecovery {
    *         to preserve or it could not be moved.
    */
   static QString preserveUnsavedSession();
+
+  /**
+   * rief Whether \p path is the unsaved-session snapshot itself.
+   *
+   * That file is scratch space owned by the recovery machinery. If it is ever
+   * opened or saved as an ordinary project, a clean shutdown no longer removes
+   * it, and every later start then claims a crash that never happened.
+   */
+  static bool isUnsavedSessionPath(const QString& path);
+
+  /**
+   * rief Takes exclusive use of the unsaved-session snapshot for this process.
+   *
+   * There is one such snapshot per user, but nothing stops the operator running
+   * two copies of the application. Without this, a second copy started while the
+   * first has an unnamed project open finds the first one's live snapshot and
+   * reports it as left behind by a crash - and answering that prompt deletes
+   * the snapshot the first copy depends on.
+   *
+   * The lock dies with the process, so a snapshot left by a crash is claimable
+   * again straight away.
+   *
+   * eturn The held lock, or null if another running instance holds it.
+   */
+  static std::unique_ptr<QLockFile> claimUnsavedSession();
 
   ProjectRecovery() = delete;
 };

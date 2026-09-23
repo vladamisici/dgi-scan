@@ -15,6 +15,7 @@
 #include <QEventLoop>
 #include <QFileDialog>
 #include <QFileSystemModel>
+#include <QLockFile>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QResource>
@@ -119,7 +120,8 @@ MainWindow::MainWindow()
       m_closing(false),
       m_closeRequested(false),
       m_ignoreAutoSave(0),
-      m_unsavedSessionOwned(false) {
+      m_unsavedSessionOwned(false),
+      m_unsavedSessionBusyLogged(false) {
   ApplicationSettings& settings = ApplicationSettings::getInstance();
 
   m_maxLogicalThumbSize = settings.getMaxLogicalThumbnailSize();
@@ -615,6 +617,14 @@ void MainWindow::offerUnsavedSessionRecovery() {
   if (!ProjectRecovery::hasUnsavedSession()) {
     return;
   }
+  // Another copy of the application that is still running holds this lock while
+  // it has an unnamed project open. Its snapshot is live, not left behind by a
+  // crash, and offering it here would be wrong - and answering the offer would
+  // delete it out from under that copy.
+  std::unique_ptr<QLockFile> lock = ProjectRecovery::claimUnsavedSession();
+  if (!lock) {
+    return;
+  }
 
   const QString path = ProjectRecovery::unsavedSessionPath();
   const QDateTime when = QFileInfo(path).lastModified();
@@ -638,6 +648,8 @@ void MainWindow::offerUnsavedSessionRecovery() {
     loadProjectDocument(QString(), path);
     ProjectRecovery::discardUnsavedSession();
     m_unsavedSessionOwned = true;
+    // The recovered project is autosaved back into the same file straight away.
+    m_unsavedSessionLock = std::move(lock);
   } else if (msgBox.clickedButton() == discardBtn) {
     ProjectRecovery::discardUnsavedSession();
     m_unsavedSessionOwned = true;
@@ -1082,6 +1094,20 @@ void MainWindow::autoSaveProject() {
     // nothing whatsoever.
     if (ApplicationSettings::getInstance().isCrashRecoveryEnabled() && !isBatchProcessingInProgress()) {
       const QString path = ProjectRecovery::unsavedSessionPath();
+      if (!path.isEmpty() && !m_unsavedSessionLock) {
+        m_unsavedSessionLock = ProjectRecovery::claimUnsavedSession();
+        if (!m_unsavedSessionLock) {
+          // Another running copy has an unnamed project of its own in there.
+          // Writing over it would destroy its protection, and would make it look
+          // like ours if this copy then closed cleanly.
+          if (!m_unsavedSessionBusyLogged) {
+            CrashHandler::log(QLatin1String(
+                "Autosave: the unsaved-session snapshot is in use by another running instance; not writing it"));
+            m_unsavedSessionBusyLogged = true;
+          }
+          return;
+        }
+      }
       if (!path.isEmpty()) {
         if (!m_unsavedSessionOwned) {
           // There is a snapshot here that this run never claimed - the operator
@@ -1600,6 +1626,16 @@ bool MainWindow::saveProjectAsTriggered() {
     projectFile += ".ScanTailor";
   }
 
+  if (ProjectRecovery::isUnsavedSessionPath(projectFile)) {
+    // A project saved there becomes indistinguishable from a session left behind
+    // by a crash: nothing removes it on a clean exit, so every later start would
+    // offer to "recover" it.
+    QMessageBox::warning(this, tr("Error"),
+                         tr("This location is reserved for crash recovery. Please save the project somewhere "
+                            "else."));
+    return false;
+  }
+
   if (!saveProjectWithFeedback(projectFile)) {
     return false;
   }
@@ -1616,10 +1652,8 @@ bool MainWindow::saveProjectAsTriggered() {
   updateAutoSaveTimer();
 
   // The session now has a file of its own, so the unnamed-session snapshot is
-  // obsolete - unless the operator is saving over that snapshot itself.
-  if (m_projectFile != ProjectRecovery::unsavedSessionPath()) {
-    ProjectRecovery::discardUnsavedSession();
-  }
+  // obsolete.
+  releaseUnsavedSession();
 
   QSettings settings;
   settings.setValue("project/lastDir", QFileInfo(m_projectFile).absolutePath());
@@ -1663,6 +1697,23 @@ void MainWindow::openProject() {
 }
 
 void MainWindow::openProject(const QString& projectFile) {
+  if (ProjectRecovery::isUnsavedSessionPath(projectFile)) {
+    // The scratch file itself, reached through the recent-projects list or File >
+    // Open. Opening it as a named project would make it survive every clean exit
+    // and trigger the "closed unexpectedly" offer on each start, so load it the
+    // way the recovery offer does: as the unnamed project it is.
+    std::unique_ptr<QLockFile> lock = ProjectRecovery::claimUnsavedSession();
+    if (!lock) {
+      QMessageBox::warning(this, tr("Error"),
+                           tr("This recovery file is in use by another running copy of ScanTailor."));
+      return;
+    }
+    loadProjectDocument(QString(), projectFile);
+    m_unsavedSessionOwned = true;
+    m_unsavedSessionLock = std::move(lock);
+    return;
+  }
+
   // A snapshot that outlives the session which wrote it means that session never
   // reached a clean shutdown: the application crashed, the machine was turned
   // off, or a remote-desktop connection dropped. Its contents are the operator's
@@ -2009,7 +2060,7 @@ bool MainWindow::closeProjectInteractive() {
     // Only now that the project is definitely being closed. Discarding it before
     // the prompt meant answering Cancel destroyed the recovery snapshot of a
     // session the operator had just chosen to keep working on.
-    ProjectRecovery::discardUnsavedSession();
+    releaseUnsavedSession();
     ProjectRecovery::discardSnapshot(m_projectFile);
     closeProjectWithoutSaving();
     return true;
@@ -2075,6 +2126,22 @@ bool MainWindow::closeProjectInteractive() {
   closeProjectWithoutSaving();
   return true;
 }  // MainWindow::closeProjectInteractive
+
+/**
+ * rief Ends this instance's use of the unsaved-session snapshot.
+ *
+ * Removes the file, so that the next start does not mistake a session that was
+ * closed properly for one interrupted by a crash, and lets go of the lock so
+ * another running copy can use the slot.
+ */
+void MainWindow::releaseUnsavedSession() {
+  // Only while holding the lock: without it the file may be another running
+  // copy's live snapshot, or one left by a crash that is still to be offered.
+  if (m_unsavedSessionLock) {
+    ProjectRecovery::discardUnsavedSession();
+  }
+  m_unsavedSessionLock.reset();
+}
 
 void MainWindow::closeProjectWithoutSaving() {
   auto pages = std::make_shared<ProjectPages>();
