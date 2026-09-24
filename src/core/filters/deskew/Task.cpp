@@ -242,7 +242,9 @@ Task::UiUpdater::UiUpdater(std::shared_ptr<Filter> filter,
     : m_filter(std::move(filter)),
       m_dbg(std::move(dbgImg)),
       m_image(image),
-      m_downscaledImage(ImageView::createDownscaledImage(image)),
+      // Only a page shown to the operator needs a display copy; in batch processing
+      // updateUI() returns before using it, so making one would be wasted work.
+      m_downscaledImage(batchProcessing ? QImage() : ImageView::createDownscaledImage(image)),
       m_pageId(pageId),
       m_xform(xform),
       m_uiData(uiData),
