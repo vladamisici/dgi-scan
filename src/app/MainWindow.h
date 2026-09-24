@@ -362,6 +362,8 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void updateAutoSaveTimer();
 
+  void applyLowResDisplay(bool enabled);
+
   /**
    * \brief Parks the objects a project switch is replacing until the workers let go.
    *

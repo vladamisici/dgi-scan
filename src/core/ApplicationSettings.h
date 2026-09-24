@@ -24,6 +24,17 @@ class ApplicationSettings {
 
   void setOpenGlEnabled(bool enabled);
 
+  /**
+   * \brief Pages are shown from a reduced-resolution copy, for speed.
+   *
+   * Display only: processing, batch results, output files and every coordinate
+   * the operator edits (content boxes, split lines, margins, zones) are
+   * unaffected. \see ImageViewBase::setLowResDisplay()
+   */
+  bool isLowResDisplayEnabled() const;
+
+  void setLowResDisplayEnabled(bool enabled);
+
   QString getColorScheme() const;
 
   void setColorScheme(const QString& scheme);
@@ -134,6 +145,7 @@ class ApplicationSettings {
   static inline QString getKey(const QString& keyName);
 
   static const bool DEFAULT_OPENGL_STATE;
+  static const bool DEFAULT_LOW_RES_DISPLAY;
   static const QString DEFAULT_COLOR_SCHEME;
   static const bool DEFAULT_AUTO_SAVE_PROJECT;
   static const int DEFAULT_AUTO_SAVE_INTERVAL_SEC;
@@ -159,6 +171,7 @@ class ApplicationSettings {
 
   static const QString ROOT_KEY;
   static const QString OPENGL_STATE_KEY;
+  static const QString LOW_RES_DISPLAY_KEY;
   static const QString AUTO_SAVE_PROJECT_KEY;
   static const QString AUTO_SAVE_INTERVAL_SEC_KEY;
   static const QString CRASH_RECOVERY_KEY;

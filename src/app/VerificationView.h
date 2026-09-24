@@ -28,7 +28,7 @@ class VerificationView : public QWidget {
   class ImageLoadResult;
   class ImageLoaderTask;
 
-  void originalLoaded(const QImage& image);
+  void originalLoaded(const QImage& image, const QImage& downscaled);
   void showOriginalMessage(const QString& message);
 
   QStackedWidget* m_originalStack;

@@ -77,6 +77,7 @@
     <addaction name="actionRelinking"/>
     <addaction name="separator"/>
     <addaction name="actionDebug"/>
+    <addaction name="actionLowResDisplay"/>
     <addaction name="separator"/>
     <addaction name="actionSettings"/>
     <addaction name="actionDefaults"/>
@@ -1033,6 +1034,23 @@ QToolButton:pressed {
    </property>
    <property name="shortcut">
     <string notr="true"/>
+   </property>
+   <property name="autoRepeat">
+    <bool>false</bool>
+   </property>
+  </action>
+  <action name="actionLowResDisplay">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Low-resolution Page Display</string>
+   </property>
+   <property name="toolTip">
+    <string>Show pages from a reduced-resolution copy for faster display. Output is not affected.</string>
+   </property>
+   <property name="shortcut">
+    <string notr="true">F6</string>
    </property>
    <property name="autoRepeat">
     <bool>false</bool>

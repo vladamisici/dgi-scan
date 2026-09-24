@@ -86,6 +86,7 @@ void logSettings() {
        core::diag::Attr("auto_save_interval_sec", app.getAutoSaveIntervalSec()),
        core::diag::Attr("crash_recovery", app.isCrashRecoveryEnabled()),
        core::diag::Attr("opengl", app.isOpenGlEnabled()),
+       core::diag::Attr("low_res_display", app.isLowResDisplayEnabled()),
        core::diag::Attr("thumbnail_quality_w", thumbQuality.width()),
        core::diag::Attr("thumbnail_quality_h", thumbQuality.height()),
        core::diag::Attr("max_logical_thumb_w", thumbSize.width()),

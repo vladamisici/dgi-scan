@@ -46,18 +46,19 @@ QWidget* panelWithHeader(const QString& title, QWidget* content, const bool edit
 
 class VerificationView::ImageLoadResult : public AbstractCommand<void> {
  public:
-  ImageLoadResult(QPointer<VerificationView> owner, QImage image)
-      : m_owner(std::move(owner)), m_image(std::move(image)) {}
+  ImageLoadResult(QPointer<VerificationView> owner, QImage image, QImage downscaled)
+      : m_owner(std::move(owner)), m_image(std::move(image)), m_downscaled(std::move(downscaled)) {}
 
   void operator()() override {
     if (VerificationView* owner = m_owner) {
-      owner->originalLoaded(m_image);
+      owner->originalLoaded(m_image, m_downscaled);
     }
   }
 
  private:
   QPointer<VerificationView> m_owner;
   QImage m_image;
+  QImage m_downscaled;
 };
 
 class VerificationView::ImageLoaderTask : public AbstractCommand<BackgroundExecutor::TaskResultPtr> {
@@ -65,7 +66,20 @@ class VerificationView::ImageLoaderTask : public AbstractCommand<BackgroundExecu
   ImageLoaderTask(VerificationView* owner, const ImageId& imageId) : m_owner(owner), m_imageId(imageId) {}
 
   BackgroundExecutor::TaskResultPtr operator()() override {
-    return std::make_shared<ImageLoadResult>(m_owner, ImageLoader::load(m_imageId));
+    QImage image = ImageLoader::load(m_imageId);
+    // Downscaled here, on the background thread. Done in originalLoaded(), it
+    // ran on the GUI thread - an area average over the whole original, after a
+    // full 1-bit to 8-bit conversion for bitonal scans - on every page shown.
+    QImage downscaled;
+    if (!image.isNull()) {
+      downscaled = ImageViewBase::createDownscaledImage(image);
+      if (ImageViewBase::lowResDisplay()) {
+        // Nothing is edited on this side, so no coordinates depend on the full
+        // resolution: the reduced copy can stand in for it altogether.
+        image = downscaled;
+      }
+    }
+    return std::make_shared<ImageLoadResult>(m_owner, image, downscaled);
   }
 
  private:
@@ -106,13 +120,13 @@ VerificationView::VerificationView(QWidget* projectView,
   }
 }
 
-void VerificationView::originalLoaded(const QImage& image) {
+void VerificationView::originalLoaded(const QImage& image, const QImage& downscaled) {
   if (image.isNull()) {
     showOriginalMessage(tr("The matching original image could not be opened."));
     return;
   }
 
-  auto* view = new BasicImageView(image, ImageViewBase::createDownscaledImage(image), Margins());
+  auto* view = new BasicImageView(image, downscaled, Margins());
   m_originalStack->setCurrentIndex(m_originalStack->addWidget(view));
 }
 

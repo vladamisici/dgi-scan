@@ -49,7 +49,7 @@ The environment variable overrides the INI.
 ### `settings` (one, written by the application after `start`)
 
 Each application setting that can affect performance, as `key: value`:
-`auto_save_project`, `auto_save_interval_sec`, `crash_recovery`, `opengl`, `thumbnail_quality_w`,
+`auto_save_project`, `auto_save_interval_sec`, `crash_recovery`, `opengl`, `low_res_display`, `thumbnail_quality_w`,
 `thumbnail_quality_h`, `max_logical_thumb_w`, `max_logical_thumb_h`, `batch_threads` (the number of
 worker threads actually used: the setting, capped at the logical CPU count), `batch_threads_setting` (the
 stored value), `worker_thread_priority` (`normal` or `low`), `highlight_deviation`, `single_column_thumbs`,
@@ -187,7 +187,11 @@ GUI thread (`th: gui`):
 
 Aggregated only (`agg`), because they are too frequent to write one by one:
 `thumbs.factory.get`, `cache_task.output`, `thumbs.load_result`, `ui.paint.image_view`,
-`ui.paint.thumbnail`, `ui.image_view.ctor`, `task.deliver` (worker → GUI event latency), `bgexec.task`.
+`ui.paint.thumbnail`, `ui.image_view.ctor`, `task.deliver` (worker → GUI event latency), `bgexec.task`,
+`ui.downscale` (making a view's reduced copy, on a worker thread).
+
+`ui.hq_transform` (attr `src_mpx`: megapixels of the image it renders from - the full image, or the reduced
+copy with low-resolution display on) is an `op` on the `bgexec` thread: rendering the sharp version of a view.
 
 Worker and helper threads:
 

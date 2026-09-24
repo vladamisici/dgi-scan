@@ -224,6 +224,10 @@ MainWindow::MainWindow()
 
   thumbColumnViewBtn->setChecked(settings.isSingleColumnThumbnailDisplayEnabled());
   deviationHighlightingBtn->setChecked(settings.isHighlightDeviationEnabled());
+  // Before any page is shown: views and the worker threads that prepare their
+  // images read the flag, not the settings.
+  ImageViewBase::setLowResDisplay(settings.isLowResDisplayEnabled());
+  actionLowResDisplay->setChecked(settings.isLowResDisplayEnabled());
 
   addAction(actionFirstPage);
   addAction(actionLastPage);
@@ -292,6 +296,11 @@ MainWindow::MainWindow()
   connect(actionMagnifyThumbnails, &QAction::triggered, magnifyThumbnails);
   connect(actionDiminishThumbnails, &QAction::triggered, diminishThumbnails);
   connect(actionReloadPage, SIGNAL(triggered(bool)), SLOT(reloadCurrentPage()));
+  // triggered, not toggled: onSettingsChanged() calls setChecked(), which must not loop back here.
+  connect(actionLowResDisplay, &QAction::triggered, this, [this](const bool checked) {
+    ApplicationSettings::getInstance().setLowResDisplayEnabled(checked);
+    applyLowResDisplay(checked);
+  });
 
   connect(actionSwitchFilter1, SIGNAL(triggered(bool)), SLOT(switchFilter1()));
   connect(actionSwitchFilter2, SIGNAL(triggered(bool)), SLOT(switchFilter2()));
@@ -2142,6 +2151,23 @@ void MainWindow::onSettingsChanged() {
   }
 
   updateAutoSaveTimer();
+
+  const bool lowResDisplay = settings.isLowResDisplayEnabled();
+  if (lowResDisplay != ImageViewBase::lowResDisplay()) {
+    actionLowResDisplay->setChecked(lowResDisplay);
+    applyLowResDisplay(lowResDisplay);
+  }
+}
+
+/**
+ * \brief Switches low-resolution page display on or off, and redraws the page with it.
+ *
+ * Views take the setting when they are built, so the page is reloaded - as F5
+ * would - rather than left showing the old resolution until the next one.
+ */
+void MainWindow::applyLowResDisplay(const bool enabled) {
+  ImageViewBase::setLowResDisplay(enabled);
+  reloadCurrentPage();
 }
 
 void MainWindow::showAboutDialog() {

@@ -9,6 +9,7 @@
 #include <QtCore/QSettings>
 
 const bool ApplicationSettings::DEFAULT_OPENGL_STATE = false;
+const bool ApplicationSettings::DEFAULT_LOW_RES_DISPLAY = false;
 const QString ApplicationSettings::DEFAULT_COLOR_SCHEME = "dark";
 const bool ApplicationSettings::DEFAULT_AUTO_SAVE_PROJECT = true;
 const int ApplicationSettings::DEFAULT_AUTO_SAVE_INTERVAL_SEC = 300;
@@ -34,6 +35,7 @@ const bool ApplicationSettings::DEFAULT_SHOW_CANCELING_SELECTION_QUESTION = true
 
 const QString ApplicationSettings::ROOT_KEY = "settings";
 const QString ApplicationSettings::OPENGL_STATE_KEY = "enable_opengl";
+const QString ApplicationSettings::LOW_RES_DISPLAY_KEY = "low_res_display";
 const QString ApplicationSettings::AUTO_SAVE_PROJECT_KEY = "auto_save_project";
 const QString ApplicationSettings::AUTO_SAVE_INTERVAL_SEC_KEY = "auto_save_interval_sec";
 const QString ApplicationSettings::CRASH_RECOVERY_KEY = "crash_recovery";
@@ -74,6 +76,14 @@ bool ApplicationSettings::isOpenGlEnabled() const {
 
 void ApplicationSettings::setOpenGlEnabled(bool enabled) {
   m_settings.setValue(getKey(OPENGL_STATE_KEY), enabled);
+}
+
+bool ApplicationSettings::isLowResDisplayEnabled() const {
+  return m_settings.value(getKey(LOW_RES_DISPLAY_KEY), DEFAULT_LOW_RES_DISPLAY).toBool();
+}
+
+void ApplicationSettings::setLowResDisplayEnabled(bool enabled) {
+  m_settings.setValue(getKey(LOW_RES_DISPLAY_KEY), enabled);
 }
 
 QString ApplicationSettings::getColorScheme() const {
