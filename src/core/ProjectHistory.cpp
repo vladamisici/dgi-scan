@@ -9,6 +9,8 @@
 #include <QSettings>
 #include <algorithm>
 
+#include "Diagnostics.h"
+
 namespace core {
 namespace {
 const QLatin1String HISTORY_KEY("project/history");
@@ -26,7 +28,15 @@ QString ProjectHistory::Entry::displayName() const {
 }
 
 bool ProjectHistory::Entry::isAvailable() const {
-  return !filePath.isEmpty() && QFileInfo::exists(filePath);
+  DIAG_SCOPE(diagScope, "history.is_available");
+  const bool available = !filePath.isEmpty() && QFileInfo::exists(filePath);
+  // Only a slow check names its file. That is the one worth chasing (a share that
+  // is offline, a drive spinning up), and naming every path would copy the whole
+  // recent-projects list into the log each time the start page is shown.
+  if (diagScope.elapsedMs() >= 50) {
+    diagScope.attr(core::diag::Attr("path", filePath));
+  }
+  return available;
 }
 
 QString ProjectHistory::Entry::lastOpenedDescription() const {
@@ -67,6 +77,8 @@ QString ProjectHistory::Entry::lastOpenedDescription() const {
 }
 
 void ProjectHistory::read() {
+  // Before the QSettings object, so its destruction is timed too.
+  DIAG_SCOPE(diagScope, "history.read");
   QSettings settings;
   std::vector<Entry> loaded;
 
@@ -105,6 +117,8 @@ void ProjectHistory::read() {
 }
 
 void ProjectHistory::write() const {
+  // Before the QSettings object: its destructor is what writes to the disk.
+  DIAG_SCOPE(diagScope, "history.write");
   QSettings settings;
   settings.beginWriteArray(HISTORY_KEY);
   int index = 0;

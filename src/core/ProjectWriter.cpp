@@ -11,6 +11,7 @@
 #include "AbstractFilter.h"
 #include "AtomicFileOverwriter.h"
 #include "CrashHandler.h"
+#include "Diagnostics.h"
 #include "FileNameDisambiguator.h"
 #include "ImageId.h"
 #include "ImageMetadata.h"
@@ -69,27 +70,42 @@ ProjectWriter::~ProjectWriter() = default;
 bool ProjectWriter::write(const QString& filePath,
                           const std::vector<FilterPtr>& filters,
                           QString* errorMessage) const {
+  DIAG_SCOPE(diagScope, "project.writer.write");
   QDomDocument doc;
-  QDomElement rootEl(doc.createElement("project"));
-  doc.appendChild(rootEl);
-  rootEl.setAttribute("version", PROJECT_VERSION);
-  rootEl.setAttribute("outputDirectory", m_outFileNameGen.outDir());
-  rootEl.setAttribute("layoutDirection", m_layoutDirection == Qt::LeftToRight ? "LTR" : "RTL");
+  {
+    DIAG_SCOPE(buildScope, "project.writer.write.build_dom");
+    QDomElement rootEl(doc.createElement("project"));
+    doc.appendChild(rootEl);
+    rootEl.setAttribute("version", PROJECT_VERSION);
+    rootEl.setAttribute("outputDirectory", m_outFileNameGen.outDir());
+    rootEl.setAttribute("layoutDirection", m_layoutDirection == Qt::LeftToRight ? "LTR" : "RTL");
 
-  rootEl.appendChild(processDirectories(doc));
-  rootEl.appendChild(processFiles(doc));
-  rootEl.appendChild(processImages(doc));
-  rootEl.appendChild(processPages(doc));
-  rootEl.appendChild(m_outFileNameGen.disambiguator()->toXml(doc, "file-name-disambiguation",
-                                                             boost::bind(&ProjectWriter::packFilePath, this, _1)));
+    rootEl.appendChild(processDirectories(doc));
+    rootEl.appendChild(processFiles(doc));
+    rootEl.appendChild(processImages(doc));
+    rootEl.appendChild(processPages(doc));
+    rootEl.appendChild(m_outFileNameGen.disambiguator()->toXml(doc, "file-name-disambiguation",
+                                                               boost::bind(&ProjectWriter::packFilePath, this, _1)));
 
-  QDomElement filtersEl(doc.createElement("filters"));
-  rootEl.appendChild(filtersEl);
-  auto it(filters.begin());
-  const auto end(filters.end());
-  for (; it != end; ++it) {
-    filtersEl.appendChild((*it)->saveSettings(*this, doc));
+    QDomElement filtersEl(doc.createElement("filters"));
+    rootEl.appendChild(filtersEl);
+    auto it(filters.begin());
+    const auto end(filters.end());
+    for (; it != end; ++it) {
+      filtersEl.appendChild((*it)->saveSettings(*this, doc));
+    }
   }
+
+  // The size is recorded together with the outcome, on the way out, because a
+  // failed commit falls back to writing in place and serialises a second time.
+  qint64 bytesWritten = -1;
+  const auto finish = [&diagScope, &bytesWritten](const bool ok) {
+    if (bytesWritten >= 0) {
+      diagScope.attr(core::diag::Attr("bytes", bytesWritten));
+    }
+    diagScope.attr(core::diag::Attr("ok", ok));
+    return ok;
+  };
 
   // The project is written to a temporary file next to the target and only then
   // renamed over it. Opening the target directly with QIODevice::WriteOnly - as
@@ -102,12 +118,12 @@ bool ProjectWriter::write(const QString& filePath,
   //
   // Note that the QTextStream codec is deliberately left at its default so the
   // on-disk encoding stays byte-for-byte what previous versions produced.
-  const auto fail = [errorMessage](const QString& reason) {
+  const auto fail = [errorMessage, &finish](const QString& reason) {
     if (errorMessage) {
       *errorMessage = reason;
     }
     core::CrashHandler::log(QLatin1String("Saving the project failed: ") + reason);
-    return false;
+    return finish(false);
   };
 
   // Writing over the target directly. This is what the application always did,
@@ -120,12 +136,14 @@ bool ProjectWriter::write(const QString& filePath,
       return fail(QObject::tr("%1; and writing to it directly failed too (%2)").arg(why, file.errorString()));
     }
     {
+      DIAG_SCOPE(serializeScope, "project.writer.write.serialize");
       QTextStream strm(&file);
       doc.save(strm, 2);
       strm.flush();
       if (strm.status() != QTextStream::Ok) {
         return fail(QObject::tr("could not write the project data to \"%1\"").arg(filePath));
       }
+      bytesWritten = file.pos();
     }
     if (!file.flush() || (file.error() != QFileDevice::NoError)) {
       return fail(QObject::tr("could not write \"%1\" (%2)").arg(filePath, file.errorString()));
@@ -135,7 +153,7 @@ bool ProjectWriter::write(const QString& filePath,
                             + QLatin1String("\" in place, without the usual protection against an interrupted save, "
                                             "because ")
                             + why);
-    return true;
+    return finish(true);
   };
 
   AtomicFileOverwriter overwriter;
@@ -150,6 +168,7 @@ bool ProjectWriter::write(const QString& filePath,
   }
 
   {
+    DIAG_SCOPE(serializeScope, "project.writer.write.serialize");
     QTextStream strm(device);
     doc.save(strm, 2);
     strm.flush();
@@ -157,8 +176,14 @@ bool ProjectWriter::write(const QString& filePath,
       overwriter.abort();
       return fail(QObject::tr("could not write the project data to \"%1\"").arg(filePath));
     }
+    bytesWritten = device->pos();
   }
-  if (!overwriter.commit()) {
+  bool committed = false;
+  {
+    DIAG_SCOPE(commitScope, "project.writer.write.commit");
+    committed = overwriter.commit();
+  }
+  if (!committed) {
     // Replacing the target needs the right to delete the file being displaced,
     // which overwriting it in place never needed - a share, or a retention
     // agent, can grant one and refuse the other. The data was written
@@ -171,7 +196,7 @@ bool ProjectWriter::write(const QString& filePath,
     }
     return fail(overwriter.errorString());
   }
-  return true;
+  return finish(true);
 }  // ProjectWriter::write
 
 QDomElement ProjectWriter::processDirectories(QDomDocument& doc) const {

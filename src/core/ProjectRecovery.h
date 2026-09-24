@@ -99,7 +99,7 @@ class ProjectRecovery {
   static QString preserveUnsavedSession();
 
   /**
-   * rief Whether \p path is the unsaved-session snapshot itself.
+   * \brief Whether \p path is the unsaved-session snapshot itself.
    *
    * That file is scratch space owned by the recovery machinery. If it is ever
    * opened or saved as an ordinary project, a clean shutdown no longer removes
@@ -108,7 +108,7 @@ class ProjectRecovery {
   static bool isUnsavedSessionPath(const QString& path);
 
   /**
-   * rief Takes exclusive use of the unsaved-session snapshot for this process.
+   * \brief Takes exclusive use of the unsaved-session snapshot for this process.
    *
    * There is one such snapshot per user, but nothing stops the operator running
    * two copies of the application. Without this, a second copy started while the
@@ -119,7 +119,7 @@ class ProjectRecovery {
    * The lock dies with the process, so a snapshot left by a crash is claimable
    * again straight away.
    *
-   * eturn The held lock, or null if another running instance holds it.
+   * \return The held lock, or null if another running instance holds it.
    */
   static std::unique_ptr<QLockFile> claimUnsavedSession();
 

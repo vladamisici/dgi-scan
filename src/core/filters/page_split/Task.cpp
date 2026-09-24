@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "DebugImagesImpl.h"
+#include "Diagnostics.h"
 #include "Dpm.h"
 #include "Filter.h"
 #include "FilterData.h"
@@ -86,6 +87,10 @@ Task::Task(std::shared_ptr<Filter> filter,
 Task::~Task() = default;
 
 FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data) {
+  DIAG_SCOPE(diagScope, "stage.page_split");
+  // Always written, even at the basic level: a stage's own time is its duration
+  // minus the next stage's, so a missing record would be charged to the stage above.
+  diagScope.forceRecord();
   status.throwIfCancelled();
 
   Settings::Record record(m_settings->getPageRecord(m_pageInfo.imageId()));

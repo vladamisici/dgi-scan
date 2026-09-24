@@ -3,6 +3,8 @@
 
 #include "CrashHandler.h"
 
+#include "Diagnostics.h"
+
 #include <config.h>
 
 #include <QCoreApplication>
@@ -106,6 +108,8 @@ void appendCrashNote(const wchar_t* stemPath, const char* reason, const void* ad
  * need for a std::terminate() or an abort().
  */
 void writeCrashReport(EXCEPTION_POINTERS* exceptionInfo, const char* reason) {
+  // First of all: the watchdog must stop using dbghelp before the dump below does.
+  diag::notifyCrashing();
   if (!g_reportDirW[0]) {
     return;
   }

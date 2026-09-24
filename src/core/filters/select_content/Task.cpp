@@ -10,6 +10,7 @@
 
 #include "ContentBoxFinder.h"
 #include "DebugImagesImpl.h"
+#include "Diagnostics.h"
 #include "Dpm.h"
 #include "Filter.h"
 #include "FilterData.h"
@@ -70,6 +71,10 @@ Task::Task(std::shared_ptr<Filter> filter,
 Task::~Task() = default;
 
 FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data) {
+  DIAG_SCOPE(diagScope, "stage.select_content");
+  // Always written, even at the basic level: a stage's own time is its duration
+  // minus the next stage's, so a missing record would be charged to the stage above.
+  diagScope.forceRecord();
   status.throwIfCancelled();
 
   std::unique_ptr<Params> params(m_settings->getPageParams(m_pageId));

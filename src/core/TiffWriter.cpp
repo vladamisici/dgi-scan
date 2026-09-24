@@ -13,6 +13,7 @@
 #include <cmath>
 
 #include "ApplicationSettings.h"
+#include "Diagnostics.h"
 #include "Dpm.h"
 
 /**
@@ -102,20 +103,31 @@ static void deviceUnmap(thandle_t, tdata_t, toff_t) {
 }
 
 bool TiffWriter::writeImage(const QString& filePath, const QImage& image) {
+  DIAG_SCOPE(diagScope, "tiff.write");
+  diagScope.attr(core::diag::Attr("w", image.width()));
+  diagScope.attr(core::diag::Attr("h", image.height()));
+  diagScope.attr(core::diag::Attr("mb", image.sizeInBytes() / 1048576.0));
+  // A write that fails fast and one that succeeds slowly call for different
+  // fixes, so every exit says which it was.
+  const auto finish = [&diagScope](const bool ok) {
+    diagScope.attr(core::diag::Attr("ok", ok));
+    return ok;
+  };
+
   if (image.isNull()) {
-    return false;
+    return finish(false);
   }
 
   QFile file(filePath);
   if (!file.open(QFile::WriteOnly)) {
-    return false;
+    return finish(false);
   }
 
   if (!writeImage(file, image)) {
     file.remove();
-    return false;
+    return finish(false);
   }
-  return true;
+  return finish(true);
 }
 
 bool TiffWriter::writeImage(QIODevice& device, const QImage& image) {

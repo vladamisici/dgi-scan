@@ -68,7 +68,15 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   DECLARE_NON_COPYABLE(MainWindow)
 
   Q_OBJECT
+  // Drives the window through a scripted workload for the diagnostics suite
+  // (scantailor --stress). It needs the same internal entry points the menus
+  // and dialogs use, minus the dialogs.
+  friend class StressDriver;
+
  public:
+  /** \brief How an interactive page load ended. \see interactiveLoadFinished() */
+  enum LoadOutcome { LOAD_OK, LOAD_ERROR, LOAD_TASK_FAILED, LOAD_OUTPUT_NOT_READY };
+
   MainWindow();
 
   ~MainWindow() override;
@@ -78,6 +86,19 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   std::set<PageId> selectedPages() const;
 
   std::vector<PageRange> selectedRanges() const;
+
+ signals:
+  /**
+   * \brief The page shown for interaction has finished loading, or failed to.
+   *
+   * Emitted once per interactive load that was not superseded by another one,
+   * including when nothing could be loaded. Without it the only way to know a
+   * page is on screen is to poll widget state.
+   */
+  void interactiveLoadFinished(const PageId& pageId, int filterIdx, int outcome);
+
+  /** \brief Batch processing ended; \p completed is false if it was stopped early. */
+  void batchProcessingFinished(bool completed);
 
  protected:
   bool eventFilter(QObject* obj, QEvent* ev) override;
@@ -109,7 +130,8 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
  private slots:
 
-  void autoSaveProject();
+  /** \return whether anything was written; m_lastAutoSaveBranch says which way it went. */
+  bool autoSaveProject();
 
   /** \brief Saves a recovery snapshot when the desktop session ends. */
   void commitData(QSessionManager& manager);
@@ -392,6 +414,11 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   std::unique_ptr<QWidget> m_batchProcessingWidget;
   std::unique_ptr<ProcessingIndicationWidget> m_processingIndicationWidget;
   boost::function<bool()> m_checkBeepWhenFinished;
+  // Set while continueBatchProcessing() stops a batch that ran to the end, so
+  // that batchProcessingFinished() can tell completion from an interruption.
+  bool m_batchCompleting = false;
+  // The path the last autosave took ("project_file", "snapshot", "batch_skip", ...), a string literal.
+  const char* m_lastAutoSaveBranch = "none";
   SelectedPage m_selectedPage;
   QObjectCleanupHandler m_optionsWidgetCleanup;
   QObjectCleanupHandler m_imageWidgetCleanup;

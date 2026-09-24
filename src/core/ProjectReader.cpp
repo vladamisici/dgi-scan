@@ -7,6 +7,7 @@
 #include <boost/bind.hpp>
 
 #include "AbstractFilter.h"
+#include "Diagnostics.h"
 #include "FileNameDisambiguator.h"
 #include "ProjectPages.h"
 #include "XmlUnmarshaller.h"
@@ -14,6 +15,7 @@
 
 ProjectReader::ProjectReader(const QDomDocument& doc)
     : m_doc(doc), m_disambiguator(std::make_shared<FileNameDisambiguator>()) {
+  DIAG_SCOPE(diagScope, "project.open.reader");
   QDomElement projectEl(m_doc.documentElement());
 
   m_version = projectEl.attribute("version");

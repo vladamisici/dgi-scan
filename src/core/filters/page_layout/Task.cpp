@@ -5,6 +5,7 @@
 
 #include <utility>
 
+#include "Diagnostics.h"
 #include "Dpm.h"
 #include "Filter.h"
 #include "FilterData.h"
@@ -68,6 +69,10 @@ FilterResultPtr Task::process(const TaskStatus& status,
                               const FilterData& data,
                               const QRectF& pageRect,
                               const QRectF& contentRect) {
+  DIAG_SCOPE(diagScope, "stage.page_layout");
+  // Always written, even at the basic level: a stage's own time is its duration
+  // minus the next stage's, so a missing record would be charged to the stage above.
+  diagScope.forceRecord();
   status.throwIfCancelled();
 
   const QSizeF contentSizeMm(Utils::calcRectSizeMM(data.xform(), contentRect));

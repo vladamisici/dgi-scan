@@ -20,6 +20,7 @@
 #include "ApplicationSettings.h"
 #include "BackgroundExecutor.h"
 #include "ColorSchemeManager.h"
+#include "Diagnostics.h"
 #include "Dpm.h"
 #include "ImagePresentation.h"
 #include "OpenGLSupport.h"
@@ -132,6 +133,7 @@ ImageViewBase::ImageViewBase(const QImage& image,
       m_ignoreResizeEvents(0),
       m_hqTransformEnabled(true),
       m_infoProvider(Dpm(m_image)) {
+  DIAG_COUNT("ui.image_view.ctor");
   /* For some reason, the default viewport fills background with
    * a color different from QPalette::Window at the first show on Windows.
    * Here we make it not fill it automatically at all
@@ -394,6 +396,9 @@ void ImageViewBase::ensureStatusTip(const QString& statusTip) {
 }
 
 void ImageViewBase::paintEvent(QPaintEvent* event) {
+  // Before the painter, so that its destructor - where the drawing is actually
+  // flushed to the device - is counted too.
+  DIAG_COUNT("ui.paint.image_view");
   QPainter painter(viewport());
 
   // Fill the background as Qt::WA_OpaquePaintEvent attribute is enabled.

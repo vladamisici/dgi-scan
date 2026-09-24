@@ -14,6 +14,7 @@
 #include <UnitsProvider.h>
 #include <UpscaleIntegerTimes.h>
 #include <core/ApplicationSettings.h>
+#include <core/Diagnostics.h>
 #include <imageproc/Grayscale.h>
 #include <imageproc/OrthogonalRotation.h>
 #include <imageproc/PolygonRasterizer.h>
@@ -80,6 +81,10 @@ Task::Task(std::shared_ptr<Filter> filter,
 Task::~Task() = default;
 
 FilterResultPtr Task::process(const TaskStatus& status, FilterData data) {
+  DIAG_SCOPE(diagScope, "stage.deskew");
+  // Always written, even at the basic level: a stage's own time is its duration
+  // minus the next stage's, so a missing record would be charged to the stage above.
+  diagScope.forceRecord();
   status.throwIfCancelled();
 
   const Dependencies deps(data.xform().preCropArea(), data.xform().preRotation());

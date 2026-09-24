@@ -6,6 +6,7 @@
 
 #include <QObject>
 #include <QSettings>
+#include <atomic>
 #include <memory>
 
 #include "BackgroundTask.h"
@@ -54,6 +55,8 @@ class WorkerThreadPool : public QObject {
 
   QThreadPool* m_pool;
   QSettings m_settings;
+  // "settings/worker_thread_priority" = "low" runs page processing below the GUI thread's priority.
+  std::atomic<bool> m_lowPriority{false};
 };
 
 

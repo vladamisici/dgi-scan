@@ -25,6 +25,7 @@ set(gui_only_sources
     VerificationView.cpp VerificationView.h
     SystemLoadWidget.cpp SystemLoadWidget.h
     MainWindow.cpp MainWindow.h
+    StressDriver.cpp StressDriver.h
     main.cpp
     StatusBarPanel.cpp StatusBarPanel.h
     DefaultParamsDialog.cpp DefaultParamsDialog.h)

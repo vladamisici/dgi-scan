@@ -26,6 +26,7 @@
 #include <memory>
 
 #include "ColorSchemeManager.h"
+#include "Diagnostics.h"
 #include "IncompleteThumbnail.h"
 #include "PageSequence.h"
 #include "ThumbnailFactory.h"
@@ -461,6 +462,8 @@ void ThumbnailSequence::Impl::attachView(QGraphicsView* const view) {
 void ThumbnailSequence::Impl::reset(const PageSequence& pages,
                                     const SelectionAction selectionAction,
                                     std::shared_ptr<const PageOrderProvider> orderProvider) {
+  DIAG_SCOPE(diagScope, "thumbs.sequence.reset");
+  diagScope.attr(::core::diag::Attr("pages", static_cast<qint64>(pages.numPages())));
   m_orderProvider = std::move(orderProvider);
 
   std::set<PageId> selected;
@@ -683,6 +686,7 @@ void ThumbnailSequence::Impl::invalidateThumbnailImpl(const ItemsById::iterator 
 }  // ThumbnailSequence::Impl::invalidateThumbnailImpl
 
 void ThumbnailSequence::Impl::invalidateAllThumbnails() {
+  DIAG_SCOPE(diagScope, "thumbs.invalidate_all");
   // Recreate thumbnails now, whether a thumbnail is incomplete
   // is taken into account when sorting.
   ItemsInOrder::iterator ordIt(m_itemsInOrder.begin());
