@@ -11,10 +11,17 @@
 #include <core/ProjectRecovery.h>
 
 #include <QCoreApplication>
+#include <QBrush>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
+#include <QDirIterator>
 #include <QEventLoop>
 #include <QFileDialog>
 #include <QFileSystemModel>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QListWidget>
 #include <QLockFile>
 #include <QMessageBox>
 #include <QPushButton>
@@ -68,6 +75,7 @@
 #include "ThumbnailFactory.h"
 #include "UnitsProvider.h"
 #include "Utils.h"
+#include "VerificationView.h"
 #include "WorkerThreadPool.h"
 #include "config.h"
 #include "filters/deskew/CacheDrivenTask.h"
@@ -117,6 +125,7 @@ MainWindow::MainWindow()
       m_ignoreSelectionChanges(0),
       m_ignorePageOrderingChanges(0),
       m_debug(false),
+      m_verificationMode(false),
       m_closing(false),
       m_closeRequested(false),
       m_ignoreAutoSave(0),
@@ -478,8 +487,11 @@ void MainWindow::showNewOpenProjectPanel() {
   // Qt doesn't like.
   connect(nop, SIGNAL(newProject()), this, SLOT(newProject()), Qt::QueuedConnection);
   connect(nop, SIGNAL(openProject()), this, SLOT(openProject()), Qt::QueuedConnection);
+  connect(nop, SIGNAL(verificationProject()), this, SLOT(startVerification()), Qt::QueuedConnection);
   connect(nop, SIGNAL(openRecentProject(const QString&)), this, SLOT(openProject(const QString&)),
           Qt::QueuedConnection);
+  connect(nop, SIGNAL(openRecentVerificationProject(const QString&, const QStringList&)), this,
+          SLOT(openRecentVerificationProject(const QString&, const QStringList&)), Qt::QueuedConnection);
 
   layout->addWidget(nop, 1, 1);
   layout->setColumnStretch(0, 1);
@@ -839,19 +851,29 @@ void MainWindow::setImageWidget(QWidget* widget, const Ownership ownership, Debu
     removeImageWidget();
   }
 
+  QWidget* presentedWidget = widget;
+  if (m_verificationMode && !overlay && ownership == TRANSFER_OWNERSHIP
+      && Utils::castOrFindChild<ImageViewBase*>(widget)) {
+    const PageInfo page(m_thumbSequence->selectionLeader());
+    if (!page.isNull()) {
+      presentedWidget = new VerificationView(widget, verificationOriginalFor(page.imageId()),
+                                             page.imageId().filePath());
+    }
+  }
+
   if (ownership == TRANSFER_OWNERSHIP) {
-    m_imageWidgetCleanup.add(widget);
+    m_imageWidgetCleanup.add(presentedWidget);
   }
 
   if (!debugImages || debugImages->empty()) {
-    if (widget != m_imageFrameLayout->currentWidget()) {
-      m_imageFrameLayout->addWidget(widget);
+    if (presentedWidget != m_imageFrameLayout->currentWidget()) {
+      m_imageFrameLayout->addWidget(presentedWidget);
       if (overlay) {
-        m_imageFrameLayout->setCurrentWidget(widget);
+        m_imageFrameLayout->setCurrentWidget(presentedWidget);
       }
     }
   } else {
-    m_tabbedDebugImages->addTab(widget, "Main");
+    m_tabbedDebugImages->addTab(presentedWidget, "Main");
     AutoRemovingFile file;
     QString label;
     while (!(file = debugImages->retrieveNext(&label)).get().isNull()) {
@@ -1661,6 +1683,7 @@ bool MainWindow::saveProjectAsTriggered() {
   ProjectHistory history;
   history.read();
   history.touch(m_projectFile, m_pages ? m_pages->numImages() : 0, m_outFileNameGen.outDir());
+  history.setVerification(m_projectFile, m_verificationMode, m_verificationInputDirectories);
   history.write();
   return true;
 }  // MainWindow::saveProjectAsTriggered
@@ -1669,6 +1692,10 @@ void MainWindow::newProject() {
   if (!closeProjectInteractive()) {
     return;
   }
+
+  m_verificationMode = false;
+  m_verificationInputDirectories.clear();
+  m_verificationFilesByName.clear();
 
   // It will delete itself when it's done.
   auto* context = new ProjectCreationContext(this);
@@ -1685,9 +1712,14 @@ void MainWindow::openProject() {
     return;
   }
 
+  m_verificationMode = false;
+  m_verificationInputDirectories.clear();
+  m_verificationFilesByName.clear();
+
   const QString projectDir(QSettings().value("project/lastDir").toString());
   const QString projectFile(QFileDialog::getOpenFileName(this, tr("Open Project"), projectDir,
-                                                         tr("Scan Tailor Projects") + " (*.ScanTailor)"));
+                                                         tr("Scan Tailor Projects")
+                                                             + " (*.ScanTailor *.scantailorProject)"));
   if (projectFile.isEmpty()) {
     // Cancelled by user.
     return;
@@ -1697,6 +1729,63 @@ void MainWindow::openProject() {
 }
 
 void MainWindow::openProject(const QString& projectFile) {
+  m_verificationMode = false;
+  m_verificationInputDirectories.clear();
+  m_verificationFilesByName.clear();
+  openProjectWithCurrentMode(projectFile);
+}
+
+void MainWindow::startVerification() {
+  if (!closeProjectInteractive()) {
+    return;
+  }
+
+  const QString projectDir(QSettings().value("project/lastDir").toString());
+  const QString projectFile(QFileDialog::getOpenFileName(this, tr("Open Project for Verification"), projectDir,
+                                                         tr("Scan Tailor Projects")
+                                                             + " (*.ScanTailor *.scantailorProject)"));
+  if (projectFile.isEmpty()) {
+    return;
+  }
+
+  const QStringList inputDirectories = selectVerificationInputDirectories();
+  if (inputDirectories.isEmpty()) {
+    return;
+  }
+
+  m_verificationMode = true;
+  m_verificationInputDirectories = inputDirectories;
+  m_verificationFilesByName.clear();
+  openProjectWithCurrentMode(projectFile);
+}
+
+void MainWindow::openRecentVerificationProject(const QString& projectFile,
+                                               const QStringList& inputDirectories) {
+  if (!closeProjectInteractive()) {
+    return;
+  }
+
+  bool inputSelectionNeeded = inputDirectories.isEmpty();
+  for (const QString& directory : inputDirectories) {
+    if (!QDir(directory).exists()) {
+      inputSelectionNeeded = true;
+      break;
+    }
+  }
+
+  const QStringList selectedDirectories
+      = inputSelectionNeeded ? selectVerificationInputDirectories(inputDirectories) : inputDirectories;
+  if (selectedDirectories.isEmpty()) {
+    return;
+  }
+
+  m_verificationMode = true;
+  m_verificationInputDirectories = selectedDirectories;
+  m_verificationFilesByName.clear();
+  openProjectWithCurrentMode(projectFile);
+}
+
+void MainWindow::openProjectWithCurrentMode(const QString& projectFile) {
   if (ProjectRecovery::isUnsavedSessionPath(projectFile)) {
     // The scratch file itself, reached through the recent-projects list or File >
     // Open. Opening it as a named project would make it survive every clean exit
@@ -1729,6 +1818,9 @@ void MainWindow::openProject(const QString& projectFile) {
         ProjectRecovery::discardSnapshot(projectFile);
         break;
       case CANCEL_RECOVERY:
+        m_verificationMode = false;
+        m_verificationInputDirectories.clear();
+        m_verificationFilesByName.clear();
         return;
     }
   }
@@ -1749,12 +1841,18 @@ void MainWindow::loadProjectDocument(const QString& projectFile, const QString& 
   QFile file(documentPath);
   if (!file.open(QIODevice::ReadOnly)) {
     QMessageBox::warning(this, tr("Error"), tr("Unable to open the project file."));
+    m_verificationMode = false;
+    m_verificationInputDirectories.clear();
+    m_verificationFilesByName.clear();
     return;
   }
 
   QDomDocument doc;
   if (!doc.setContent(&file)) {
     QMessageBox::warning(this, tr("Error"), tr("The project file is broken."));
+    m_verificationMode = false;
+    m_verificationInputDirectories.clear();
+    m_verificationFilesByName.clear();
     return;
   }
 
@@ -1773,13 +1871,154 @@ void MainWindow::projectOpened(ProjectOpeningContext* context) {
     history.read();
     history.touch(context->projectFile(), context->projectReader()->pages()->numImages(),
                   context->projectReader()->outputDirectory());
+    history.setVerification(context->projectFile(), m_verificationMode, m_verificationInputDirectories);
     history.write();
 
     QSettings().setValue("project/lastDir", QFileInfo(context->projectFile()).absolutePath());
   }
 
+  if (m_verificationMode) {
+    rebuildVerificationFileIndex();
+  }
+
   switchToNewProject(context->projectReader()->pages(), context->projectReader()->outputDirectory(),
                      context->projectFile(), context->projectReader());
+}
+
+QStringList MainWindow::selectVerificationInputDirectories(const QStringList& initialDirectories) {
+  QDialog dialog(this);
+  dialog.setWindowTitle(tr("Verification Input Folders"));
+  dialog.setWindowModality(Qt::WindowModal);
+  dialog.resize(620, 320);
+
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* explanation = new QLabel(
+      tr("Add the folder or folders containing the unedited input images. They are used only for comparison and "
+         "will never be modified."),
+      &dialog);
+  explanation->setWordWrap(true);
+  layout->addWidget(explanation);
+
+  auto* folders = new QListWidget(&dialog);
+  folders->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  for (const QString& directory : initialDirectories) {
+    if (!directory.isEmpty()) {
+      folders->addItem(QDir::toNativeSeparators(QDir(directory).absolutePath()));
+    }
+  }
+  layout->addWidget(folders, 1);
+
+  auto* folderButtons = new QHBoxLayout();
+  auto* addFolder = new QPushButton(tr("Add Folder..."), &dialog);
+  auto* removeFolder = new QPushButton(tr("Remove Selected"), &dialog);
+  folderButtons->addWidget(addFolder);
+  folderButtons->addWidget(removeFolder);
+  folderButtons->addStretch(1);
+  layout->addLayout(folderButtons);
+
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  layout->addWidget(buttons);
+
+  const auto updateButtons = [folders, removeFolder, buttons]() {
+    removeFolder->setEnabled(!folders->selectedItems().isEmpty());
+    bool allFoldersAvailable = folders->count() > 0;
+    for (int i = 0; i < folders->count(); ++i) {
+      QListWidgetItem* item = folders->item(i);
+      const bool available = QDir(item->text()).exists();
+      item->setForeground(available ? QBrush() : QBrush(Qt::red));
+      item->setToolTip(available ? QString() : tr("This folder is not available."));
+      allFoldersAvailable = allFoldersAvailable && available;
+    }
+    buttons->button(QDialogButtonBox::Ok)->setEnabled(allFoldersAvailable);
+  };
+  connect(folders, &QListWidget::itemSelectionChanged, &dialog, updateButtons);
+  connect(addFolder, &QPushButton::clicked, &dialog, [this, folders, updateButtons]() {
+    const QString startDir = folders->count() > 0
+                                 ? folders->item(folders->count() - 1)->text()
+                                 : QSettings().value("verification/lastInputDir").toString();
+    const QString directory
+        = QFileDialog::getExistingDirectory(this, tr("Add Verification Input Folder"), startDir,
+                                            QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+    if (directory.isEmpty()) {
+      return;
+    }
+
+    const QString absolutePath = QDir::toNativeSeparators(QDir(directory).absolutePath());
+    const QList<QListWidgetItem*> duplicates = folders->findItems(absolutePath, Qt::MatchFixedString);
+    if (duplicates.isEmpty()) {
+      folders->addItem(absolutePath);
+    }
+    QSettings().setValue("verification/lastInputDir", absolutePath);
+    updateButtons();
+  });
+  connect(removeFolder, &QPushButton::clicked, &dialog, [folders, updateButtons]() {
+    qDeleteAll(folders->selectedItems());
+    updateButtons();
+  });
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  updateButtons();
+
+  if (dialog.exec() != QDialog::Accepted) {
+    return QStringList();
+  }
+
+  QStringList result;
+  for (int i = 0; i < folders->count(); ++i) {
+    result.append(QDir::cleanPath(folders->item(i)->text()));
+  }
+  return result;
+}
+
+void MainWindow::rebuildVerificationFileIndex() {
+  m_verificationFilesByName.clear();
+  for (const QString& inputDirectory : m_verificationInputDirectories) {
+    QDirIterator it(inputDirectory, QDir::Files | QDir::Readable, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+      const QString path = QDir::cleanPath(it.next());
+      QStringList& matches = m_verificationFilesByName[QFileInfo(path).fileName().toCaseFolded()];
+      if (!matches.contains(path, Qt::CaseInsensitive)) {
+        matches.append(path);
+      }
+    }
+  }
+}
+
+ImageId MainWindow::verificationOriginalFor(const ImageId& projectImage) const {
+  const QStringList candidates
+      = m_verificationFilesByName.value(QFileInfo(projectImage.filePath()).fileName().toCaseFolded());
+  if (candidates.isEmpty()) {
+    return ImageId();
+  }
+
+  const QStringList projectParts
+      = QDir::fromNativeSeparators(QFileInfo(projectImage.filePath()).absolutePath()).split('/', Qt::SkipEmptyParts);
+  QString bestCandidate;
+  int bestScore = -1;
+  bool bestScoreIsAmbiguous = false;
+  for (const QString& candidate : candidates) {
+    const QStringList candidateParts
+        = QDir::fromNativeSeparators(QFileInfo(candidate).absolutePath()).split('/', Qt::SkipEmptyParts);
+    int score = 0;
+    int projectIndex = projectParts.size() - 1;
+    int candidateIndex = candidateParts.size() - 1;
+    while (projectIndex >= 0 && candidateIndex >= 0
+           && projectParts.at(projectIndex).compare(candidateParts.at(candidateIndex), Qt::CaseInsensitive) == 0) {
+      ++score;
+      --projectIndex;
+      --candidateIndex;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestCandidate = candidate;
+      bestScoreIsAmbiguous = false;
+    } else if (score == bestScore) {
+      bestScoreIsAmbiguous = true;
+    }
+  }
+
+  return bestScoreIsAmbiguous ? ImageId() : ImageId(bestCandidate, projectImage.page());
 }
 
 void MainWindow::closeProject() {
@@ -2015,6 +2254,9 @@ void MainWindow::updateWindowTitle() {
   } else {
     projectName = QFileInfo(m_projectFile).completeBaseName();
   }
+  if (m_verificationMode) {
+    projectName += tr(" [Verification]");
+  }
   const QString version(QString::fromUtf8(VERSION));
   setWindowTitle(tr("%1 - %2 [%3bit]")
                      .arg(projectName, QString::fromUtf8(APPLICATION_DISPLAY_NAME))
@@ -2128,7 +2370,7 @@ bool MainWindow::closeProjectInteractive() {
 }  // MainWindow::closeProjectInteractive
 
 /**
- * rief Ends this instance's use of the unsaved-session snapshot.
+ * \brief Ends this instance's use of the unsaved-session snapshot.
  *
  * Removes the file, so that the next start does not mistake a session that was
  * closed properly for one interrupted by a crash, and lets go of the lock so
@@ -2144,6 +2386,9 @@ void MainWindow::releaseUnsavedSession() {
 }
 
 void MainWindow::closeProjectWithoutSaving() {
+  m_verificationMode = false;
+  m_verificationInputDirectories.clear();
+  m_verificationFilesByName.clear();
   auto pages = std::make_shared<ProjectPages>();
   switchToNewProject(pages, QString());
 }

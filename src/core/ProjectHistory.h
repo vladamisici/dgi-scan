@@ -6,6 +6,7 @@
 
 #include <QDateTime>
 #include <QString>
+#include <QStringList>
 #include <vector>
 
 namespace core {
@@ -27,9 +28,12 @@ class ProjectHistory {
  public:
   struct Entry {
     QString filePath;
+    QString customName;
     QString outputDirectory;
+    QStringList inputDirectories;
     QDateTime lastOpened;
     int pageCount = 0;
+    bool verification = false;
 
     bool isValid() const { return !filePath.isEmpty(); }
 
@@ -58,6 +62,14 @@ class ProjectHistory {
    * anything already known about the project is kept.
    */
   void touch(const QString& filePath, int pageCount = 0, const QString& outputDirectory = QString());
+
+  /** \brief Changes the operator-facing name without renaming the project file. */
+  void rename(const QString& filePath, const QString& customName);
+
+  /** \brief Marks how this project was last opened and remembers its comparison inputs. */
+  void setVerification(const QString& filePath,
+                       bool verification,
+                       const QStringList& inputDirectories = QStringList());
 
   void remove(const QString& filePath);
 

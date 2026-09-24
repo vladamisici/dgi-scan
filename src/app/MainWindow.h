@@ -5,10 +5,12 @@
 #define SCANTAILOR_APP_MAINWINDOW_H_
 
 #include <QMainWindow>
+#include <QHash>
 #include <QObjectCleanupHandler>
 #include <QPointer>
 #include <QSizeF>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <boost/function.hpp>
 #include <memory>
@@ -89,6 +91,8 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
  public slots:
 
   void openProject(const QString& projectFile);
+
+  void openRecentVerificationProject(const QString& projectFile, const QStringList& inputDirectories);
 
   void loadProjectDocument(const QString& projectFile, const QString& documentPath);
 
@@ -185,6 +189,8 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void openProject();
 
+  void startVerification();
+
   void projectOpened(ProjectOpeningContext* context);
 
   void closeProject();
@@ -231,6 +237,8 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   void setupThumbView();
 
   void showNewOpenProjectPanel();
+
+  void openProjectWithCurrentMode(const QString& projectFile);
 
   SavePromptResult promptProjectSave();
 
@@ -356,6 +364,12 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void setupIcons();
 
+  QStringList selectVerificationInputDirectories(const QStringList& initialDirectories = QStringList());
+
+  void rebuildVerificationFileIndex();
+
+  ImageId verificationOriginalFor(const ImageId& projectImage) const;
+
   QSizeF m_maxLogicalThumbSize;
   std::shared_ptr<ProjectPages> m_pages;
   std::shared_ptr<StageSequence> m_stages;
@@ -386,6 +400,10 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   int m_ignoreSelectionChanges;
   int m_ignorePageOrderingChanges;
   bool m_debug;
+  /** Whether the current project is shown beside immutable source images. */
+  bool m_verificationMode;
+  QStringList m_verificationInputDirectories;
+  QHash<QString, QStringList> m_verificationFilesByName;
   bool m_closing;
   /** Guards against re-entering the deferred close sequence. \see closeEvent() */
   bool m_closeRequested;

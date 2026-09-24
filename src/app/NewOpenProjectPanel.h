@@ -25,7 +25,11 @@ class NewOpenProjectPanel : public QWidget, private Ui::NewOpenProjectPanel {
 
   void openProject();
 
+  void verificationProject();
+
   void openRecentProject(const QString& projectFile);
+
+  void openRecentVerificationProject(const QString& projectFile, const QStringList& inputDirectories);
 
  protected:
   void paintEvent(QPaintEvent*) override;
@@ -40,6 +44,8 @@ class NewOpenProjectPanel : public QWidget, private Ui::NewOpenProjectPanel {
   void showEntryContextMenu(const core::ProjectHistory::Entry& entry, const QPoint& globalPos);
 
   void removeEntry(const QString& filePath);
+
+  void renameEntry(const QString& filePath, const QString& currentName);
 
   void clearHistory();
 

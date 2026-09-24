@@ -7,9 +7,12 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QFontMetrics>
+#include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QMenu>
 #include <QPainter>
+#include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -32,12 +35,14 @@ NewOpenProjectPanel::NewOpenProjectPanel(QWidget* parent) : QWidget(parent) {
 
   newProjectLabel->setText(Utils::richTextForLink(newProjectLabel->text()));
   openProjectLabel->setText(Utils::richTextForLink(openProjectLabel->text()));
+  verificationProjectLabel->setText(Utils::richTextForLink(verificationProjectLabel->text()));
 
   m_history.read();
   populateHistory();
 
   connect(newProjectLabel, SIGNAL(linkActivated(const QString&)), this, SIGNAL(newProject()));
   connect(openProjectLabel, SIGNAL(linkActivated(const QString&)), this, SIGNAL(openProject()));
+  connect(verificationProjectLabel, SIGNAL(linkActivated(const QString&)), this, SIGNAL(verificationProject()));
 }
 
 void NewOpenProjectPanel::populateHistory() {
@@ -92,8 +97,19 @@ void NewOpenProjectPanel::addHistoryEntry(const ProjectHistory::Entry& entry) {
 
   auto* row = new QWidget(recentProjectsGroup);
   auto* rowLayout = new QVBoxLayout(row);
-  rowLayout->setContentsMargins(0, 0, 0, 4);
+  rowLayout->setContentsMargins(entry.verification ? 7 : 0, 0, 0, 4);
   rowLayout->setSpacing(0);
+
+  if (entry.verification) {
+    row->setObjectName(QLatin1String("verificationProjectRow"));
+    row->setAttribute(Qt::WA_StyledBackground, true);
+    row->setStyleSheet(QLatin1String(
+        "QWidget#verificationProjectRow { border-left: 3px solid palette(highlight); background: palette(alternate-base); }"));
+  }
+
+  auto* nameLayout = new QHBoxLayout();
+  nameLayout->setContentsMargins(0, 0, 0, 0);
+  nameLayout->setSpacing(6);
 
   auto* nameLabel = new QLabel(row);
   nameLabel->setWordWrap(true);
@@ -104,14 +120,45 @@ void NewOpenProjectPanel::addHistoryEntry(const ProjectHistory::Entry& entry) {
 
   if (available) {
     nameLabel->setText(Utils::richTextForLink(entry.displayName(), entry.filePath));
-    connect(nameLabel, SIGNAL(linkActivated(const QString&)), this, SIGNAL(openRecentProject(const QString&)));
+    connect(nameLabel, &QLabel::linkActivated, this, [this, entry](const QString&) {
+      if (entry.verification) {
+        emit openRecentVerificationProject(entry.filePath, entry.inputDirectories);
+      } else {
+        emit openRecentProject(entry.filePath);
+      }
+    });
   } else {
     // Kept rather than hidden: a project on a share that happens to be offline
     // is not a project the operator has finished with.
     nameLabel->setText(entry.displayName().toHtmlEscaped());
     nameLabel->setEnabled(false);
   }
-  rowLayout->addWidget(nameLabel);
+  nameLayout->addWidget(nameLabel, 1);
+
+  if (entry.verification) {
+    auto* badge = new QLabel(tr("VERIFICATION"), row);
+    QFont badgeFont = badge->font();
+    badgeFont.setBold(true);
+    badgeFont.setPointSize(std::max(1, baseFontSize - 7));
+    badge->setFont(badgeFont);
+    badge->setAlignment(Qt::AlignCenter);
+    badge->setStyleSheet(QLatin1String(
+        "QLabel { color: palette(highlighted-text); background: palette(highlight); padding: 2px 5px; }"));
+    nameLayout->addWidget(badge, 0, Qt::AlignTop);
+  }
+
+  auto* renameButton = new QToolButton(row);
+  renameButton->setText(tr("Rename"));
+  renameButton->setToolTip(tr("Edit the name shown in Project History"));
+  renameButton->setAutoRaise(true);
+  renameButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+  QFont renameFont = renameButton->font();
+  renameFont.setPointSize(std::max(1, baseFontSize - 7));
+  renameButton->setFont(renameFont);
+  connect(renameButton, &QToolButton::clicked, this,
+          [this, entry]() { renameEntry(entry.filePath, entry.displayName()); });
+  nameLayout->addWidget(renameButton, 0, Qt::AlignTop);
+  rowLayout->addLayout(nameLayout);
 
   QStringList details;
   if (entry.pageCount > 0) {
@@ -156,6 +203,8 @@ void NewOpenProjectPanel::showEntryContextMenu(const ProjectHistory::Entry& entr
   QAction* const openAction = menu.addAction(tr("Open"));
   openAction->setEnabled(entry.isAvailable());
 
+  QAction* const renameAction = menu.addAction(tr("Rename..."));
+
   QAction* const revealAction = menu.addAction(tr("Open Containing Folder"));
   revealAction->setEnabled(QFileInfo::exists(QFileInfo(entry.filePath).absolutePath()));
 
@@ -167,12 +216,31 @@ void NewOpenProjectPanel::showEntryContextMenu(const ProjectHistory::Entry& entr
     return;
   }
   if (chosen == openAction) {
-    emit openRecentProject(entry.filePath);
+    if (entry.verification) {
+      emit openRecentVerificationProject(entry.filePath, entry.inputDirectories);
+    } else {
+      emit openRecentProject(entry.filePath);
+    }
+  } else if (chosen == renameAction) {
+    renameEntry(entry.filePath, entry.displayName());
   } else if (chosen == revealAction) {
     QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(entry.filePath).absolutePath()));
   } else if (chosen == removeAction) {
     removeEntry(entry.filePath);
   }
+}
+
+void NewOpenProjectPanel::renameEntry(const QString& filePath, const QString& currentName) {
+  bool accepted = false;
+  const QString name = QInputDialog::getText(this, tr("Rename Project"), tr("Project name:"), QLineEdit::Normal,
+                                             currentName, &accepted);
+  if (!accepted) {
+    return;
+  }
+
+  m_history.rename(filePath, name);
+  m_history.write();
+  populateHistory();
 }
 
 void NewOpenProjectPanel::removeEntry(const QString& filePath) {

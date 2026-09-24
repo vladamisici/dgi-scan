@@ -18,6 +18,9 @@ const QLatin1String LEGACY_KEY("project/recent");
 }  // namespace
 
 QString ProjectHistory::Entry::displayName() const {
+  if (!customName.trimmed().isEmpty()) {
+    return customName.trimmed();
+  }
   const QString name = QFileInfo(filePath).completeBaseName();
   return name.isEmpty() ? filePath : name;
 }
@@ -76,8 +79,11 @@ void ProjectHistory::read() {
       continue;
     }
     entry.outputDirectory = settings.value(QLatin1String("outputDirectory")).toString();
+    entry.customName = settings.value(QLatin1String("customName")).toString();
+    entry.inputDirectories = settings.value(QLatin1String("inputDirectories")).toStringList();
     entry.lastOpened = settings.value(QLatin1String("lastOpened")).toDateTime();
     entry.pageCount = settings.value(QLatin1String("pageCount"), 0).toInt();
+    entry.verification = settings.value(QLatin1String("verification"), false).toBool();
     loaded.push_back(entry);
   }
   settings.endArray();
@@ -108,12 +114,36 @@ void ProjectHistory::write() const {
     }
     settings.setArrayIndex(index);
     settings.setValue(QLatin1String("path"), entry.filePath);
+    settings.setValue(QLatin1String("customName"), entry.customName);
     settings.setValue(QLatin1String("outputDirectory"), entry.outputDirectory);
+    settings.setValue(QLatin1String("inputDirectories"), entry.inputDirectories);
     settings.setValue(QLatin1String("lastOpened"), entry.lastOpened);
     settings.setValue(QLatin1String("pageCount"), entry.pageCount);
+    settings.setValue(QLatin1String("verification"), entry.verification);
     ++index;
   }
   settings.endArray();
+}
+
+void ProjectHistory::rename(const QString& filePath, const QString& customName) {
+  const auto it = std::find_if(m_entries.begin(), m_entries.end(),
+                               [&filePath](const Entry& entry) { return entry.filePath == filePath; });
+  if (it != m_entries.end()) {
+    it->customName = customName.trimmed();
+  }
+}
+
+void ProjectHistory::setVerification(const QString& filePath,
+                                     const bool verification,
+                                     const QStringList& inputDirectories) {
+  const auto it = std::find_if(m_entries.begin(), m_entries.end(),
+                               [&filePath](const Entry& entry) { return entry.filePath == filePath; });
+  if (it == m_entries.end()) {
+    return;
+  }
+
+  it->verification = verification;
+  it->inputDirectories = verification ? inputDirectories : QStringList();
 }
 
 void ProjectHistory::touch(const QString& filePath, const int pageCount, const QString& outputDirectory) {
