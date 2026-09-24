@@ -16,6 +16,7 @@ set(common_sources
     ImageMetadata.cpp ImageMetadata.h
     OutOfMemoryHandler.cpp OutOfMemoryHandler.h
     CrashHandler.cpp CrashHandler.h
+    Diagnostics.cpp Diagnostics.h
     ProjectRecovery.cpp ProjectRecovery.h
     ProjectHistory.cpp ProjectHistory.h
     PageSelectionAccessor.cpp PageSelectionAccessor.h
@@ -128,8 +129,10 @@ target_link_libraries(
     fix_orientation page_split deskew select_content page_layout output)
 if (WIN32)
   # dbghelp provides MiniDumpWriteDump, used by CrashHandler so that a crash
-  # leaves a usable report behind instead of the application simply vanishing.
-  target_link_libraries(core PRIVATE dbghelp)
+  # leaves a usable report behind instead of the application simply vanishing,
+  # and the symbol lookup behind the stall stacks in Diagnostics. psapi provides
+  # the process memory counters Diagnostics samples.
+  target_link_libraries(core PRIVATE dbghelp psapi)
 endif()
 target_include_directories(core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 set_target_properties(core PROPERTIES AUTOUIC ON)

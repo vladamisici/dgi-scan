@@ -9,6 +9,7 @@
 #include <cmath>
 
 #include "ApplicationSettings.h"
+#include "Diagnostics.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -23,6 +24,16 @@ bool Utils::overwritingRename(const QString& from,
                               const QString& to,
                               QString* errorMessage,
                               const RenameRetry retry) {
+  DIAG_SCOPE(diagScope, "file.rename");
+  // Only ever called once the error code has been read: building attributes
+  // allocates, and that can reset the thread's last-error value.
+  const auto finish = [&diagScope](const int tries, const int slept, const qint64 code, const bool ok) {
+    diagScope.attr(core::diag::Attr("attempts", tries));
+    diagScope.attr(core::diag::Attr("slept_ms", slept));
+    diagScope.attr(core::diag::Attr("error", code));
+    diagScope.attr(core::diag::Attr("ok", ok));
+    return ok;
+  };
 #ifdef Q_OS_WIN
   // Retried briefly, for a RenameRetry::Retry caller. A virus scanner, the search
   // indexer or a backup agent that holds either file open for a moment without
@@ -36,16 +47,22 @@ bool Utils::overwritingRename(const QString& from,
   static const int delaysMs[] = {0, 30, 60, 120, 240};
   const int attempts = (retry == RenameRetry::Retry) ? static_cast<int>(sizeof(delaysMs) / sizeof(delaysMs[0])) : 1;
   unsigned long error = 0;
+  int attemptsMade = 0;
+  int sleptMs = 0;
   for (int i = 0; i < attempts; ++i) {
     const int delay = delaysMs[i];
     if (delay > 0) {
       ::Sleep(delay);
+      sleptMs += delay;
     }
+    ++attemptsMade;
     if (MoveFileExW((WCHAR*) from.utf16(), (WCHAR*) to.utf16(), MOVEFILE_REPLACE_EXISTING) != 0) {
       if (errorMessage) {
         errorMessage->clear();
       }
-      return true;
+      // The error of the last failed attempt, if any: after a retried success it
+      // says what the retries were waiting out.
+      return finish(attemptsMade, sleptMs, static_cast<qint64>(error), true);
     }
     // Read immediately, before anything else can reset it. Building the message
     // here instead would be a bug: Qt's translation and string formatting can
@@ -58,7 +75,7 @@ bool Utils::overwritingRename(const QString& from,
   if (errorMessage) {
     *errorMessage = systemErrorString(error);
   }
-  return false;
+  return finish(attemptsMade, sleptMs, static_cast<qint64>(error), false);
 #else
   // rename(2) is atomic and does not fail for a concurrent reader, so there is
   // nothing here that retrying would help with.
@@ -67,13 +84,13 @@ bool Utils::overwritingRename(const QString& from,
     if (errorMessage) {
       errorMessage->clear();
     }
-    return true;
+    return finish(1, 0, 0, true);
   }
   const int error = errno;
   if (errorMessage) {
     *errorMessage = systemErrorString(static_cast<unsigned long>(error));
   }
-  return false;
+  return finish(1, 0, error, false);
 #endif
 }
 

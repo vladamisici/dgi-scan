@@ -14,6 +14,7 @@
 #include <QVBoxLayout>
 
 #include "ColorSchemeManager.h"
+#include "Diagnostics.h"
 #include "Utils.h"
 
 using namespace core;
@@ -28,6 +29,9 @@ QColor secondaryTextColor(const QPalette& palette) {
 }  // namespace
 
 NewOpenProjectPanel::NewOpenProjectPanel(QWidget* parent) : QWidget(parent) {
+  // Covers reading the project history and checking whether each recent project
+  // is still reachable, which is where a start page on a slow share would stall.
+  DIAG_SCOPE(diagScope, "ui.new_open_panel");
   setupUi(this);
 
   newProjectLabel->setText(Utils::richTextForLink(newProjectLabel->text()));

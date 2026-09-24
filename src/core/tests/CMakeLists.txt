@@ -1,6 +1,7 @@
 set(sources
     main.cpp
     TestContentSpanFinder.cpp
+    TestDiagnostics.cpp
     TestSmartFilenameOrdering.cpp
     TestProjectRecovery.cpp)
 

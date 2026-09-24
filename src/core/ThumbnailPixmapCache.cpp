@@ -19,6 +19,7 @@
 #include <boost/multi_index_container.hpp>
 
 #include "AtomicFileOverwriter.h"
+#include "Diagnostics.h"
 #include "ImageId.h"
 #include "ImageLoader.h"
 #include "OutOfMemoryHandler.h"
@@ -325,6 +326,9 @@ ThumbnailPixmapCache::Impl::~Impl() {
     m_shuttingDown = true;
   }
 
+  // Joining the thread waits for the thumbnail it is loading, which can be slow
+  // on a network share, and the last reference is often dropped on the GUI thread.
+  DIAG_SCOPE(diagScope, "thumbs.cache.destroy");
   quit();
   wait();
 }
@@ -434,6 +438,7 @@ ThumbnailPixmapCache::Status ThumbnailPixmapCache::Impl::request(
 }  // ThumbnailPixmapCache::Impl::request
 
 void ThumbnailPixmapCache::Impl::ensureThumbnailExists(const ImageId& imageId, const QImage& image) {
+  DIAG_SCOPE(diagScope, "thumbs.ensure_exists");
   if (image.isNull()) {
     return;
   }
@@ -471,6 +476,7 @@ void ThumbnailPixmapCache::Impl::ensureThumbnailExists(const ImageId& imageId, c
 }
 
 void ThumbnailPixmapCache::Impl::recreateThumbnail(const ImageId& imageId, const QImage& image) {
+  DIAG_SCOPE(diagScope, "thumbs.recreate");
   if (image.isNull()) {
     return;
   }
@@ -528,6 +534,9 @@ void ThumbnailPixmapCache::Impl::recreateThumbnail(const ImageId& imageId, const
 }  // ThumbnailPixmapCache::Impl::recreateThumbnail
 
 void ThumbnailPixmapCache::Impl::run() {
+  // Covers backgroundProcessing() when BackgroundLoader calls it as well: that
+  // object lives on this thread, so its events are delivered here.
+  ::core::diag::setThreadRole("thumbs");
   backgroundProcessing();
   exec();  // Wait for further processing requests (via custom events).
 }
@@ -642,13 +651,18 @@ bool ThumbnailPixmapCache::Impl::retireFailedItem(const LoadQueue::iterator& lqI
 QImage ThumbnailPixmapCache::Impl::loadSaveThumbnail(const ImageId& imageId,
                                                      const QString& thumbDir,
                                                      const QSize& maxThumbSize) {
+  DIAG_SCOPE(diagScope, "thumbs.bg.load");
   const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, maxThumbSize));
 
   QImage image(ImageLoader::load(thumbFilePath, 0));
   if (!image.isNull()) {
+    diagScope.attr(::core::diag::Attr("source", "cache"));
     return image;
   }
 
+  // A cache miss decodes the whole source image and writes a new thumbnail;
+  // telling the two apart is what shows whether the thumbnail cache is working.
+  diagScope.attr(::core::diag::Attr("source", "image"));
   image = ImageLoader::load(imageId);
   if (image.isNull()) {
     return QImage();
@@ -724,6 +738,7 @@ void ThumbnailPixmapCache::Impl::postLoadResult(const LoadQueue::iterator& lqIt,
 
 void ThumbnailPixmapCache::Impl::processLoadResult(LoadResultEvent* result) {
   assert(QCoreApplication::instance()->thread() == QThread::currentThread());
+  DIAG_COUNT("thumbs.load_result");
 
   QPixmap pixmap(QPixmap::fromImage(result->image()));
   result->releaseImage();

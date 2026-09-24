@@ -4,7 +4,7 @@ name: Windows
 # depends on one developer's machine being set up correctly.
 on:
   push:
-    branches: [master, 'resilience/**']
+    branches: [master, 'resilience/**', 'diagnostics/**']
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -84,7 +84,14 @@ jobs:
           $base = $main.Name -replace '\.zip$',''
           Move-Item -Force symbols-tmp-symbols.zip "$base-symbols.zip"
           cd ../build-installer
-          cpack -G NSIS -C $env:BUILD_TYPE
+          # Monolithic, like the ZIP. Left to itself CPack builds a component
+          # installer as soon as any install rule names a component, and the
+          # 40 MB .pdb became a "symbols" section ticked by default. A monolithic
+          # install honours EXCLUDE_FROM_ALL, so the .pdb stays out, and no
+          # components page is generated. Naming only Unspecified in
+          # CPACK_COMPONENTS_ALL would drop the .pdb too, but would still build a
+          # component installer around that single, hidden section.
+          cpack -G NSIS -C $env:BUILD_TYPE -D CPACK_MONOLITHIC_INSTALL=ON
 
       # A package that starts and then dies before showing a window is the exact
       # failure this repository shipped once: the build tree ran fine because the
@@ -124,6 +131,12 @@ jobs:
           Start-Process -FilePath $exe.FullName -ArgumentList "/S" -Wait
           $installed = "$env:ProgramFiles\Scantailor-DGI\scantailor.exe"
           if (-not (Test-Path $installed)) { throw "installer did not place $installed" }
+          # The .pdb is for whoever supports the deployment, never for operators;
+          # the diagnostics scripts are for measuring the build the PC really runs.
+          if (Test-Path "$env:ProgramFiles\Scantailor-DGI\symbols") { throw "installer shipped the symbols" }
+          if (-not (Test-Path "$env:ProgramFiles\Scantailor-DGI\diagnostics\Run-StressTest.ps1")) {
+            throw "installer did not ship the diagnostics scripts"
+          }
 
           $log = "$env:LOCALAPPDATA\scantailor-dgi\scantailor-dgi\crashes\scantailor.log"
           Remove-Item $log -ErrorAction SilentlyContinue
@@ -168,3 +181,153 @@ jobs:
             build-installer/scantailor-dgi-*-win64.exe
             build/scantailor-dgi-*-win64.zip
             build/scantailor-dgi-*-win64-symbols.zip
+
+  # Drives the portable package through repeated open / process / navigate /
+  # close cycles and records stalls and resource trends (diagnostics/SCHEMA.md).
+  # A job of its own so it runs on a clean machine: the build job has Qt on PATH
+  # and QT_PLUGIN_PATH set by install-qt-action, which can hide a package that
+  # does not stand on its own. The scripts come from the package, not from a
+  # checkout, because what ships is what has to work.
+  stress:
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 25
+    # A red job means a hard failure only: see the exit code contract below.
+    continue-on-error: false
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: scantailor-dgi-portable
+          path: pkg
+
+      - name: Expand the portable package
+        id: pkg
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem pkg/scantailor-dgi-*-win64.zip | Select-Object -First 1
+          if (-not $zip) { throw "the portable zip is missing from the artifact" }
+          Expand-Archive -Path $zip.FullName -DestinationPath app
+          # The zip has a top-level scantailor-dgi-<version>-win64 folder. Find
+          # the executable rather than assume that, so a layout change fails here
+          # with a clear message instead of somewhere inside the stress run.
+          $exe = Get-ChildItem app -Recurse -Filter scantailor.exe | Select-Object -First 1
+          if (-not $exe) { throw "scantailor.exe not found in $($zip.Name)" }
+          $dir = $exe.DirectoryName
+          if (-not (Test-Path "$dir/diagnostics/Run-StressTest.ps1")) {
+            throw "the package does not contain diagnostics/Run-StressTest.ps1"
+          }
+          Write-Host "application: $dir"
+          "dir=$dir" >> $env:GITHUB_OUTPUT
+
+      # Windows PowerShell 5.1 on purpose: it is what the operators' PCs have.
+      # The script runs in its own powershell.exe -File, exactly as the .cmd
+      # wrapper starts it, so the exit code is the script's own and not whatever
+      # the step's error handling makes of it.
+      #
+      # Exit code contract: 0 when every instance exited 0 and the analysis has
+      # no FAIL verdict, 1 otherwise. Timings and memory trends are reported but
+      # never fail the job, because a shared runner is too noisy to gate on them.
+      # The step timeout sits above the script's own -TimeoutMinutes and leaves
+      # the rest of the job time for the analysis and the upload.
+      - name: Stress run (Windows PowerShell 5.1)
+        id: stress
+        shell: powershell
+        timeout-minutes: 19
+        env:
+          APP_DIR: ${{ steps.pkg.outputs.dir }}
+        run: |
+          # The exit code decides this step. The 'stop' preference GitHub prepends
+          # must not turn something the run writes to stderr into a failure first.
+          $ErrorActionPreference = 'Continue'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:APP_DIR\diagnostics\Run-StressTest.ps1" `
+            -Exe "$env:APP_DIR\scantailor.exe" `
+            -Synthetic 16 -SyntheticKind gray -SyntheticDpi 300 -Pages 16 `
+            -Instances 2 -Cycles 4 -NavPages 4 -TimeoutMinutes 15 `
+            -OutDir "$env:RUNNER_TEMP\stress-out"
+          $code = $LASTEXITCODE
+          Write-Host "Run-StressTest.ps1 exited with $code"
+          exit $code
+
+      # A run cut short by the step timeout leaves its instances running with
+      # their logs open. Stop them so the analysis and the upload see settled files.
+      - name: Stop leftover instances
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Get-Process scantailor -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "stopping leftover instance, pid $($_.Id)"
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      # The same output analysed again under PowerShell 7, into a folder of its
+      # own, to catch a script that only works on 5.1. When the run itself failed
+      # the job is red already, so a non-zero exit here is only a warning; when
+      # the run passed, a different answer under 7 is a real failure.
+      - name: Analyse again (PowerShell 7)
+        if: ${{ !cancelled() && (steps.stress.outcome == 'success' || steps.stress.outcome == 'failure') }}
+        shell: pwsh
+        timeout-minutes: 3
+        env:
+          APP_DIR: ${{ steps.pkg.outputs.dir }}
+          RUN_PASSED: ${{ steps.stress.outcome == 'success' }}
+        run: |
+          # Handle the exit code below rather than have 7.4+ throw on it.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $in = Join-Path $env:RUNNER_TEMP 'stress-out'
+          $out = Join-Path $env:RUNNER_TEMP 'stress-report-pwsh'
+          if (-not (Test-Path $in)) {
+            Write-Host "::warning::the stress run left no output to analyse"
+            exit 0
+          }
+          $analyzer = Join-Path $env:APP_DIR 'diagnostics/Analyze-Diagnostics.ps1'
+          if (-not (Test-Path $analyzer)) { throw "analyzer not found: $analyzer" }
+          & pwsh -NoProfile -ExecutionPolicy Bypass -File $analyzer -Path $in -Out $out
+          $code = $LASTEXITCODE
+          Write-Host "analyzer under PowerShell $($PSVersionTable.PSVersion) exited with $code"
+          if ($env:RUN_PASSED -ne 'true') {
+            if ($code -ne 0) { Write-Host "::warning::analyzer exited with $code under PowerShell 7 on a failed run" }
+            exit 0
+          }
+          if ($code -ne 0) {
+            Write-Host "::error::the run passed under Windows PowerShell 5.1 but the analyzer exited with $code under PowerShell 7"
+            exit $code
+          }
+          if (-not (Get-ChildItem $out -File -Recurse -ErrorAction SilentlyContinue)) {
+            throw "the analyzer exited 0 under PowerShell 7 but wrote nothing to $out"
+          }
+
+      # The verdicts on the run page itself, so a red job can be read without
+      # downloading anything. The first *.md at the top of the output is taken.
+      - name: Publish the report summary
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $md = Get-ChildItem (Join-Path $env:RUNNER_TEMP 'stress-out') -Filter *.md -File -ErrorAction SilentlyContinue |
+            Sort-Object Name | Select-Object -First 1
+          if (-not $md) { exit 0 }
+          # GitHub caps a step's summary at 1 MiB.
+          if ($md.Length -gt 900KB) {
+            Add-Content $env:GITHUB_STEP_SUMMARY "$($md.Name) is too large for the summary; see the stress-report artifact."
+            exit 0
+          }
+          Get-Content -Raw -Encoding utf8 $md.FullName | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stress-report
+          # Everything but the page images: the synthetic scans and their output
+          # are regenerated identically on every run and would make the artifact
+          # hundreds of megabytes. Logs, reports, dumps and screenshots are what a
+          # failure is read from.
+          path: |
+            ${{ runner.temp }}/stress-out
+            ${{ runner.temp }}/stress-report-pwsh
+            !${{ runner.temp }}/stress-out/**/*.tif
+            !${{ runner.temp }}/stress-out/**/*.tiff
+          if-no-files-found: warn
+          retention-days: 14

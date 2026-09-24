@@ -6,6 +6,7 @@
 #include <DewarpingPointMapper.h>
 #include <PolygonUtils.h>
 #include <UnitsProvider.h>
+#include <core/Diagnostics.h>
 #include <core/TiffWriter.h>
 
 #include <QDebug>
@@ -111,6 +112,10 @@ Task::Task(std::shared_ptr<Filter> filter,
 Task::~Task() = default;
 
 FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data, const QPolygonF& contentRectPhys) {
+  DIAG_SCOPE(diagScope, "stage.output");
+  // Always written, even at the basic level: a stage's own time is its duration
+  // minus the next stage's, so a missing record would be charged to the stage above.
+  diagScope.forceRecord();
   status.throwIfCancelled();
 
   Params params = m_settings->getParams(m_pageId);
@@ -319,10 +324,13 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data, 
 
     bool invalidateParams = false;
     {
-      std::unique_ptr<OutputImage> outputImage
-          = generator.process(status, data, newPictureZones, newFillZones, distortionModel, params.depthPerception(),
-                              writeAutomask ? &automaskImg : nullptr, writeSpecklesFile ? &specklesImg : nullptr,
-                              m_dbg.get(), m_pageId, m_settings);
+      std::unique_ptr<OutputImage> outputImage;
+      {
+        DIAG_SCOPE(generateScope, "output.generate");
+        outputImage = generator.process(status, data, newPictureZones, newFillZones, distortionModel,
+                                        params.depthPerception(), writeAutomask ? &automaskImg : nullptr,
+                                        writeSpecklesFile ? &specklesImg : nullptr, m_dbg.get(), m_pageId, m_settings);
+      }
 
       params = m_settings->getParams(m_pageId);
 
@@ -350,6 +358,10 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data, 
                       << m_pageId.imageId().filePath();
           invalidateParams = true;
         } else {
+          // The split layers are written here, while the generated image is
+          // still alive; the main output file is written further down under
+          // the same operation name.
+          DIAG_SCOPE(layersWriteScope, "output.write");
           QDir().mkdir(foregroundDir);
           QDir().mkdir(backgroundDir);
           if (!TiffWriter::writeImage(foregroundFilePath, outputImageWithForeground->getForegroundImage())
@@ -377,44 +389,47 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data, 
       outImg = *outputImage;
     }
 
-    if (!renderParams.originalBackground()) {
-      QFile::remove(originalBackgroundFilePath);
-    }
-    if (!renderParams.splitOutput()) {
-      QFile::remove(foregroundFilePath);
-      QFile::remove(backgroundFilePath);
-    }
-
-    if (!TiffWriter::writeImage(outFilePath, outImg)) {
-      invalidateParams = true;
-    } else {
-      deleteMutuallyExclusiveOutputFiles();
-    }
-
-    if (writeSpecklesFile && specklesImg.isNull()) {
-      // Even if despeckling didn't actually take place, we still need
-      // to write an empty speckles file.  Making it a special case
-      // is simply not worth it.
-      BinaryImage(outImg.size(), WHITE).swap(specklesImg);
-    }
-
-    if (writeAutomask) {
-      // Note that QDir::mkdir() will fail if the parent directory,
-      // that is $OUT/cache doesn't exist. We want that behaviour,
-      // as otherwise when loading a project from a different machine,
-      // a whole bunch of bogus directories would be created.
-      QDir().mkdir(automaskDir);
-      // Also note that QDir::mkdir() will fail if the directory already exists,
-      // so we ignore its return value here.
-      if (!TiffWriter::writeImage(automaskFilePath, automaskImg.toQImage())) {
-        invalidateParams = true;
+    {
+      DIAG_SCOPE(writeScope, "output.write");
+      if (!renderParams.originalBackground()) {
+        QFile::remove(originalBackgroundFilePath);
       }
-    }
-    if (writeSpecklesFile) {
-      if (!QDir().mkpath(specklesDir)) {
+      if (!renderParams.splitOutput()) {
+        QFile::remove(foregroundFilePath);
+        QFile::remove(backgroundFilePath);
+      }
+
+      if (!TiffWriter::writeImage(outFilePath, outImg)) {
         invalidateParams = true;
-      } else if (!TiffWriter::writeImage(specklesFilePath, specklesImg.toQImage())) {
-        invalidateParams = true;
+      } else {
+        deleteMutuallyExclusiveOutputFiles();
+      }
+
+      if (writeSpecklesFile && specklesImg.isNull()) {
+        // Even if despeckling didn't actually take place, we still need
+        // to write an empty speckles file.  Making it a special case
+        // is simply not worth it.
+        BinaryImage(outImg.size(), WHITE).swap(specklesImg);
+      }
+
+      if (writeAutomask) {
+        // Note that QDir::mkdir() will fail if the parent directory,
+        // that is $OUT/cache doesn't exist. We want that behaviour,
+        // as otherwise when loading a project from a different machine,
+        // a whole bunch of bogus directories would be created.
+        QDir().mkdir(automaskDir);
+        // Also note that QDir::mkdir() will fail if the directory already exists,
+        // so we ignore its return value here.
+        if (!TiffWriter::writeImage(automaskFilePath, automaskImg.toQImage())) {
+          invalidateParams = true;
+        }
+      }
+      if (writeSpecklesFile) {
+        if (!QDir().mkpath(specklesDir)) {
+          invalidateParams = true;
+        } else if (!TiffWriter::writeImage(specklesFilePath, specklesImg.toQImage())) {
+          invalidateParams = true;
+        }
       }
     }
 

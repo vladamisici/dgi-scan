@@ -7,6 +7,7 @@
 
 #include <core/ApplicationSettings.h>
 #include <core/CrashHandler.h>
+#include <core/Diagnostics.h>
 #include <core/IconProvider.h>
 #include <core/ProjectRecovery.h>
 
@@ -387,13 +388,18 @@ void MainWindow::switchToNewProject(const std::shared_ptr<ProjectPages>& pages,
                                     const QString& outDir,
                                     const QString& projectFilePath,
                                     const ProjectReader* projectReader) {
+  DIAG_SCOPE(switchScope, "project.switch");
+  switchScope.attr(diag::Attr("pages", static_cast<qint64>(pages->numImages())));
   stopBatchProcessing(CLEAR_MAIN_AREA);
   m_interactiveQueue->cancelAndClear();
   // Everything below replaces m_pages, m_stages and the thumbnail cache, which
   // running tasks still hold references to. The GUI thread keeps its own
   // reference to the outgoing set rather than waiting for those tasks to notice
   // they have been cancelled.
-  retireProjectObjects();
+  {
+    DIAG_SCOPE(retireScope, "project.switch.retire");
+    retireProjectObjects();
+  }
 
   if (!outDir.isEmpty()) {
     Utils::maybeCreateCacheDir(outDir);
@@ -417,9 +423,12 @@ void MainWindow::switchToNewProject(const std::shared_ptr<ProjectPages>& pages,
   updateDisambiguationRecords(pages->toPageSequence(IMAGE_VIEW));
 
   // Recreate the stages and load their state.
-  m_stages = std::make_shared<StageSequence>(pages, newPageSelectionAccessor());
-  if (projectReader) {
-    projectReader->readFilterSettings(m_stages->filters());
+  {
+    DIAG_SCOPE(stagesScope, "project.switch.stages");
+    m_stages = std::make_shared<StageSequence>(pages, newPageSelectionAccessor());
+    if (projectReader) {
+      projectReader->readFilterSettings(m_stages->filters());
+    }
   }
 
   // Connect the filter list model to the view and select
@@ -445,17 +454,26 @@ void MainWindow::switchToNewProject(const std::shared_ptr<ProjectPages>& pages,
 
   // Thumbnails are stored relative to the output directory,
   // so recreate the thumbnail cache.
-  if (outDir.isEmpty()) {
-    m_thumbnailCache.reset();
-  } else {
-    m_thumbnailCache = Utils::createThumbnailCache(m_outFileNameGen.outDir());
+  {
+    DIAG_SCOPE(thumbCacheScope, "project.switch.thumb_cache");
+    if (outDir.isEmpty()) {
+      m_thumbnailCache.reset();
+    } else {
+      m_thumbnailCache = Utils::createThumbnailCache(m_outFileNameGen.outDir());
+    }
   }
-  resetThumbSequence(currentPageOrderProvider());
+  {
+    DIAG_SCOPE(resetThumbsScope, "project.switch.reset_thumbs");
+    resetThumbSequence(currentPageOrderProvider());
+  }
 
   removeFilterOptionsWidget();
   updateProjectActions();
   updateWindowTitle();
-  updateMainArea();
+  {
+    DIAG_SCOPE(mainAreaScope, "project.switch.update_main_area");
+    updateMainArea();
+  }
 
   // Opening, closing or switching projects all land here, which makes it the
   // one place that reliably knows whether autosave should be running.
@@ -586,6 +604,7 @@ void MainWindow::timerEvent(QTimerEvent* const event) {
 
   if (closeProjectInteractive()) {
     m_closing = true;
+    diag::setPhase("shutdown");
     QSettings settings;
     settings.setValue("mainWindow/maximized", isMaximized());
     if (!isMaximized()) {
@@ -683,6 +702,7 @@ MainWindow::RecoveryPromptResult MainWindow::promptProjectRecovery(const QString
 }
 
 bool MainWindow::compareFiles(const QString& fpath1, const QString& fpath2) {
+  DIAG_SCOPE(compareScope, "project.compare_files");
   QFile file1(fpath1);
   QFile file2(fpath2);
 
@@ -694,6 +714,7 @@ bool MainWindow::compareFiles(const QString& fpath1, const QString& fpath2) {
   }
 
   if (!file1.isSequential() && !file2.isSequential()) {
+    compareScope.attr(diag::Attr("bytes", file1.size()));
     if (file1.size() != file2.size()) {
       return false;
     }
@@ -749,6 +770,7 @@ void MainWindow::updateSortOptions() {
 
 void MainWindow::resetThumbSequence(const std::shared_ptr<const PageOrderProvider>& pageOrderProvider,
                                     const ThumbnailSequence::SelectionAction selectionAction) {
+  DIAG_SCOPE(resetScope, "thumbs.reset");
   if (m_thumbnailCache) {
     const std::shared_ptr<CompositeCacheDrivenTask> task(createCompositeCacheDrivenTask(m_curFilter));
 
@@ -1082,9 +1104,18 @@ void MainWindow::commitData(QSessionManager& manager) {
  * which is what routing this through saveProjectWithFeedback() used to do -
  * would be worse than the problem it reports.
  */
-void MainWindow::autoSaveProject() {
+bool MainWindow::autoSaveProject() {
+  DIAG_SCOPE(autoSaveScope, "project.autosave");
+  // Records which way autosave went; the return value says whether it wrote anything.
+  const auto outcome = [&](const char* branch, const bool wrote) {
+    autoSaveScope.attr(diag::Attr("branch", branch));
+    autoSaveScope.attr(diag::Attr("ok", wrote));
+    m_lastAutoSaveBranch = branch;
+    return wrote;
+  };
+
   if (!isProjectLoaded() || m_ignoreAutoSave) {
-    return;
+    return outcome("guard_skip", false);
   }
 
   if (m_projectFile.isEmpty()) {
@@ -1092,39 +1123,40 @@ void MainWindow::autoSaveProject() {
     // the operator does Save As. Until now such a session - easily an hour of
     // Fix DPI, page splitting and content corrections - was protected by
     // nothing whatsoever.
-    if (ApplicationSettings::getInstance().isCrashRecoveryEnabled() && !isBatchProcessingInProgress()) {
-      const QString path = ProjectRecovery::unsavedSessionPath();
-      if (!path.isEmpty() && !m_unsavedSessionLock) {
-        m_unsavedSessionLock = ProjectRecovery::claimUnsavedSession();
-        if (!m_unsavedSessionLock) {
-          // Another running copy has an unnamed project of its own in there.
-          // Writing over it would destroy its protection, and would make it look
-          // like ours if this copy then closed cleanly.
-          if (!m_unsavedSessionBusyLogged) {
-            CrashHandler::log(QLatin1String(
-                "Autosave: the unsaved-session snapshot is in use by another running instance; not writing it"));
-            m_unsavedSessionBusyLogged = true;
-          }
-          return;
+    if (!ApplicationSettings::getInstance().isCrashRecoveryEnabled() || isBatchProcessingInProgress()) {
+      return outcome(isBatchProcessingInProgress() ? "batch_skip" : "disabled", false);
+    }
+    const QString path = ProjectRecovery::unsavedSessionPath();
+    if (path.isEmpty()) {
+      return outcome("disabled", false);
+    }
+    if (!m_unsavedSessionLock) {
+      m_unsavedSessionLock = ProjectRecovery::claimUnsavedSession();
+      if (!m_unsavedSessionLock) {
+        // Another running copy has an unnamed project of its own in there.
+        // Writing over it would destroy its protection, and would make it look
+        // like ours if this copy then closed cleanly.
+        if (!m_unsavedSessionBusyLogged) {
+          CrashHandler::log(QLatin1String(
+              "Autosave: the unsaved-session snapshot is in use by another running instance; not writing it"));
+          m_unsavedSessionBusyLogged = true;
         }
-      }
-      if (!path.isEmpty()) {
-        if (!m_unsavedSessionOwned) {
-          // There is a snapshot here that this run never claimed - the operator
-          // cancelled the recovery offer, or opened a project from the command
-          // line so the offer never ran. Writing over it would destroy the only
-          // copy of that session's work.
-          const QString kept = ProjectRecovery::preserveUnsavedSession();
-          if (!kept.isEmpty()) {
-            CrashHandler::log(QLatin1String("Preserved an unclaimed recovery session as ") + kept);
-          }
-          m_unsavedSessionOwned = true;
-        }
-        QDir().mkpath(QFileInfo(path).absolutePath());
-        writeProjectQuietly(path);
+        return outcome("busy", false);
       }
     }
-    return;
+    if (!m_unsavedSessionOwned) {
+      // There is a snapshot here that this run never claimed - the operator
+      // cancelled the recovery offer, or opened a project from the command
+      // line so the offer never ran. Writing over it would destroy the only
+      // copy of that session's work.
+      const QString kept = ProjectRecovery::preserveUnsavedSession();
+      if (!kept.isEmpty()) {
+        CrashHandler::log(QLatin1String("Preserved an unclaimed recovery session as ") + kept);
+      }
+      m_unsavedSessionOwned = true;
+    }
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    return outcome("unsaved_session", writeProjectQuietly(path));
   }
 
   // Batch processing has worker threads writing the very filter settings that
@@ -1132,7 +1164,7 @@ void MainWindow::autoSaveProject() {
   // operator is not making corrections during a batch run, and the timer will
   // simply come round again once the batch finishes.
   if (isBatchProcessingInProgress()) {
-    return;
+    return outcome("batch_skip", false);
   }
 
   const ApplicationSettings& settings = ApplicationSettings::getInstance();
@@ -1142,12 +1174,13 @@ void MainWindow::autoSaveProject() {
   if (autoSaveEnabled && writeProjectQuietly(m_projectFile)) {
     // The project file on disk is now current, which makes any snapshot stale.
     ProjectRecovery::discardSnapshot(m_projectFile);
-    return;
+    return outcome("project_file", true);
   }
 
   if (recoveryEnabled) {
-    writeRecoverySnapshot();
+    return outcome("snapshot", writeRecoverySnapshot());
   }
+  return outcome(autoSaveEnabled ? "project_file" : "disabled", false);
 }
 
 /**
@@ -1164,6 +1197,7 @@ void MainWindow::autoSaveProject() {
  * followed by a prompt offering to restore nothing.
  */
 bool MainWindow::writeRecoverySnapshot() {
+  DIAG_SCOPE(snapshotScope, "project.recovery_snapshot");
   const QString snapshotPath = ProjectRecovery::snapshotPathFor(m_projectFile);
   if (snapshotPath.isEmpty()) {
     return false;
@@ -1199,9 +1233,12 @@ bool MainWindow::writeProjectQuietly(const QString& projectFile) {
     return false;
   }
 
+  DIAG_SCOPE(writeScope, "project.write_quiet");
   ProjectWriter writer(m_pages, m_selectedPage, m_outFileNameGen);
   QString error;
   const bool ok = writer.write(projectFile, m_stages->filters(), &error);
+  writeScope.attr(diag::Attr("target", projectFile == m_projectFile ? "project" : "snapshot"));
+  writeScope.attr(diag::Attr("ok", ok));
   if (!ok) {
     CrashHandler::log(QLatin1String("Autosave: failed to write ") + projectFile
                       + (error.isEmpty() ? QString() : QLatin1String(" - ") + error));
@@ -1302,6 +1339,10 @@ void MainWindow::filterSelectionChanged(const QItemSelection& selected) {
     m_batchQueue->cancelAndClear();
   }
 
+  DIAG_SCOPE(stageSwitchScope, "ui.stage_switch");
+  stageSwitchScope.attr(diag::Attr("from", m_curFilter));
+  stageSwitchScope.attr(diag::Attr("to", selected.front().top()));
+
   const bool wasBelowFixOrientation = isBelowFixOrientation(m_curFilter);
   const bool wasBelowSelectContent = isBelowSelectContent(m_curFilter);
   m_curFilter = selected.front().top();
@@ -1396,14 +1437,19 @@ void MainWindow::startBatchProcessing() {
 
   m_interactiveQueue->cancelAndClear();
 
+  DIAG_SCOPE(batchStartScope, "batch.start");
+  batchStartScope.attr(diag::Attr("stage", m_curFilter));
   m_batchQueue = std::make_unique<ProcessingTaskQueue>();
   PageInfo page(m_thumbSequence->selectionLeader());
+  qint64 queuedPages = 0;
   for (; !page.isNull(); page = m_thumbSequence->nextPage(page.id())) {
     for (int i = 0; i < m_stages->count(); i++) {
       m_stages->filterAt(i)->loadDefaultSettings(page);
     }
     m_batchQueue->addProcessingTask(page, createCompositeTask(page, m_curFilter, /*batch=*/true, m_debug));
+    ++queuedPages;
   }
+  batchStartScope.attr(diag::Attr("pages", queuedPages));
 
   focusButton->setChecked(true);
 
@@ -1420,7 +1466,11 @@ void MainWindow::startBatchProcessing() {
       }
     } while ((task = m_batchQueue->takeForProcessing()));
   } else {
+    // Nothing to process - there was no selected page to start from.
+    // stopBatchProcessing() has reset m_batchQueue and refreshed the main area,
+    // so carrying on below would dereference the null queue.
     stopBatchProcessing();
+    return;
   }
 
   page = m_batchQueue->selectedPage();
@@ -1436,6 +1486,8 @@ void MainWindow::stopBatchProcessing(MainAreaAction mainArea) {
     return;
   }
 
+  DIAG_SCOPE(batchStopScope, "batch.stop");
+  batchStopScope.attr(diag::Attr("completed", m_batchCompleting));
   const PageInfo page(m_batchQueue->selectedPage());
   if (!page.isNull()) {
     m_thumbSequence->setSelection(page.id());
@@ -1457,9 +1509,11 @@ void MainWindow::stopBatchProcessing(MainAreaAction mainArea) {
   }
 
   resetThumbSequence(currentPageOrderProvider());
+  emit batchProcessingFinished(m_batchCompleting);
 }
 
 void MainWindow::filterResult(const BackgroundTaskPtr& task, const FilterResultPtr& result) {
+  DIAG_SCOPE(filterResultScope, "ui.filter_result");
   // Cancelled or not, we must mark it as finished.
   m_interactiveQueue->processingFinished(task);
   if (m_batchQueue) {
@@ -1470,10 +1524,15 @@ void MainWindow::filterResult(const BackgroundTaskPtr& task, const FilterResultP
     return;
   }
 
+  const bool interactive = (task->type() == BackgroundTask::INTERACTIVE);
+
   // A null result means the task threw and was contained by the worker pool. The
   // queues have been advanced above, which is what matters; there is simply no
   // UI update to apply for that page.
   if (!result) {
+    if (interactive) {
+      emit interactiveLoadFinished(m_thumbSequence->selectionLeader().id(), m_curFilter, LOAD_TASK_FAILED);
+    }
     continueBatchProcessing();
     return;
   }
@@ -1494,7 +1553,16 @@ void MainWindow::filterResult(const BackgroundTaskPtr& task, const FilterResultP
 
   // This needs to be done even if batch processing is taking place,
   // for instance because thumbnail invalidation is done from here.
-  result->updateUI(this);
+  {
+    DIAG_SCOPE(updateUiScope, "ui.update_ui");
+    updateUiScope.attr(diag::Attr("stage", result->filter() ? m_stages->findFilter(result->filter()) : -1));
+    result->updateUI(this);
+  }
+
+  if (interactive) {
+    emit interactiveLoadFinished(m_thumbSequence->selectionLeader().id(), m_curFilter,
+                                 result->filter() ? LOAD_OK : LOAD_ERROR);
+  }
 
   continueBatchProcessing();
 }  // MainWindow::filterResult
@@ -1503,7 +1571,9 @@ void MainWindow::filterResult(const BackgroundTaskPtr& task, const FilterResultP
 void MainWindow::continueBatchProcessing() {
   if (isBatchProcessingInProgress()) {
     if (m_batchQueue->allProcessed()) {
+      m_batchCompleting = true;
       stopBatchProcessing();
+      m_batchCompleting = false;
 
       QApplication::alert(this);  // Flash the taskbar entry.
       if (m_checkBeepWhenFinished()) {
@@ -1746,19 +1816,26 @@ void MainWindow::openProject(const QString& projectFile) {
  * treated as an unnamed project.
  */
 void MainWindow::loadProjectDocument(const QString& projectFile, const QString& documentPath) {
-  QFile file(documentPath);
-  if (!file.open(QIODevice::ReadOnly)) {
-    QMessageBox::warning(this, tr("Error"), tr("Unable to open the project file."));
-    return;
-  }
-
   QDomDocument doc;
-  if (!doc.setContent(&file)) {
-    QMessageBox::warning(this, tr("Error"), tr("The project file is broken."));
+  QString error;
+  {
+    // Closed before any message box: a scope left open across a dialog's event
+    // loop would be blamed for every stall that happens while the dialog is up.
+    DIAG_SCOPE(parseScope, "project.open.parse_xml");
+    QFile file(documentPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+      error = tr("Unable to open the project file.");
+    } else {
+      parseScope.attr(diag::Attr("bytes", file.size()));
+      if (!doc.setContent(&file)) {
+        error = tr("The project file is broken.");
+      }
+    }
+  }
+  if (!error.isEmpty()) {
+    QMessageBox::warning(this, tr("Error"), error);
     return;
   }
-
-  file.close();
 
   auto* context = new ProjectOpeningContext(this, projectFile, doc);
   connect(context, SIGNAL(done(ProjectOpeningContext*)), SLOT(projectOpened(ProjectOpeningContext*)));
@@ -1766,6 +1843,7 @@ void MainWindow::loadProjectDocument(const QString& projectFile, const QString& 
 }
 
 void MainWindow::projectOpened(ProjectOpeningContext* context) {
+  DIAG_SCOPE(openedScope, "project.opened");
   // An empty project file is a recovered session that has never been saved: it
   // has no location worth remembering and nothing to put in the history.
   if (!context->projectFile().isEmpty()) {
@@ -1857,6 +1935,8 @@ void MainWindow::handleOutOfMemorySituation() {
   // window was already dying and the application just vanished instead of
   // offering to save.
   m_autoSaveTimer.stop();
+  diag::event("oom");
+  diag::sampleNow("oom");
 
   m_outOfMemoryDialog->setParams(m_projectFile, m_stages, m_pages, m_selectedPage, m_outFileNameGen);
   m_outOfMemoryDialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -1971,6 +2051,8 @@ bool MainWindow::checkReadyForOutput(const PageId* ignore) const {
 void MainWindow::loadPageInteractive(const PageInfo& page) {
   assert(!isBatchProcessingInProgress());
 
+  DIAG_SCOPE(loadPageScope, "ui.load_page");
+  loadPageScope.attr(diag::Attr("stage", m_curFilter));
   m_interactiveQueue->cancelAndClear();
 
   if (isOutputFilter() && !checkReadyForOutput(&page.id())) {
@@ -1984,6 +2066,8 @@ void MainWindow::loadPageInteractive(const PageInfo& page) {
 
     removeFilterOptionsWidget();
     setImageWidget(new ErrorWidget(errText), TRANSFER_OWNERSHIP);
+    // No task is submitted, so no result will ever arrive to report it.
+    emit interactiveLoadFinished(page.id(), m_curFilter, LOAD_OUTPUT_NOT_READY);
     return;
   }
 
@@ -2042,6 +2126,11 @@ bool MainWindow::closeProjectInteractive() {
     return true;
   }
 
+  // No scope around the whole close: it can wait on the save prompt and the
+  // Save As dialog, and a scope open across those would be blamed for any stall
+  // that happens meanwhile. The work itself is timed by the scopes below and by
+  // project.switch.
+
   if (m_projectFile.isEmpty()) {
     switch (promptProjectSave()) {
       case SAVE:
@@ -2072,7 +2161,12 @@ bool MainWindow::closeProjectInteractive() {
 
   ProjectWriter writer(m_pages, m_selectedPage, m_outFileNameGen);
 
-  if (!writer.write(backupFilePath, m_stages->filters())) {
+  bool backupWritten;
+  {
+    DIAG_SCOPE(backupScope, "project.close.backup_write");
+    backupWritten = writer.write(backupFilePath, m_stages->filters());
+  }
+  if (!backupWritten) {
     // Backup file could not be written???
     QFile::remove(backupFilePath);
     switch (promptProjectSave()) {
@@ -2094,7 +2188,12 @@ bool MainWindow::closeProjectInteractive() {
     return true;
   }
 
-  if (compareFiles(m_projectFile, backupFilePath)) {
+  bool unchanged;
+  {
+    DIAG_SCOPE(compareScope, "project.close.compare");
+    unchanged = compareFiles(m_projectFile, backupFilePath);
+  }
+  if (unchanged) {
     // The project hasn't really changed.
     QFile::remove(backupFilePath);
     ProjectRecovery::discardSnapshot(m_projectFile);
@@ -2105,7 +2204,12 @@ bool MainWindow::closeProjectInteractive() {
   switch (promptProjectSave()) {
     case SAVE: {
       QString renameError;
-      if (!Utils::overwritingRename(backupFilePath, m_projectFile, &renameError)) {
+      bool renamed;
+      {
+        DIAG_SCOPE(renameScope, "project.close.rename");
+        renamed = Utils::overwritingRename(backupFilePath, m_projectFile, &renameError);
+      }
+      if (!renamed) {
         QMessageBox::warning(this, tr("Error"),
                              renameError.isEmpty()
                                  ? tr("Error saving the project file!")
@@ -2128,7 +2232,7 @@ bool MainWindow::closeProjectInteractive() {
 }  // MainWindow::closeProjectInteractive
 
 /**
- * rief Ends this instance's use of the unsaved-session snapshot.
+ * \brief Ends this instance's use of the unsaved-session snapshot.
  *
  * Removes the file, so that the next start does not mistake a session that was
  * closed properly for one interrupted by a crash, and lets go of the lock so
@@ -2152,7 +2256,13 @@ bool MainWindow::saveProjectWithFeedback(const QString& projectFile) {
   ProjectWriter writer(m_pages, m_selectedPage, m_outFileNameGen);
 
   QString error;
-  if (!writer.write(projectFile, m_stages->filters(), &error)) {
+  bool written;
+  {
+    DIAG_SCOPE(saveScope, "project.save");
+    written = writer.write(projectFile, m_stages->filters(), &error);
+    saveScope.attr(diag::Attr("ok", written));
+  }
+  if (!written) {
     // The reason is included deliberately. A bare "Error saving the project
     // file!" tells the operator nothing they can act on and leaves support with
     // nothing to go on either; the cause is usually specific and fixable, such
@@ -2622,6 +2732,9 @@ void MainWindow::releaseRetiredProjectObjects() {
     QTimer::singleShot(500, this, &MainWindow::releaseRetiredProjectObjects);
     return;
   }
+  // Destroying a thumbnail cache joins its thread without a time limit, so this
+  // is worth watching.
+  DIAG_SCOPE(releaseScope, "project.release_retired");
   m_retiredProjectObjects.clear();
 }
 

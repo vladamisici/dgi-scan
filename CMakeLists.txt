@@ -455,11 +455,28 @@ if (WIN32)
   copy_to_build_dir(${ADDITIONAL_RUNTIME_LIBS_RELEASE} CONFIGURATIONS Release MinSizeRel RelWithDebInfo)
   copy_to_build_dir(${ADDITIONAL_RUNTIME_LIBS_DEBUG} CONFIGURATIONS Debug)
 
+  # The diagnostics scripts go beside a build-tree binary too, so a stress run
+  # from a developer build is started exactly the way it is on an operator's
+  # machine. copy_to_build_dir takes files, not directories, hence the glob;
+  # CONFIGURE_DEPENDS picks up a script added later without a manual re-run.
+  file(GLOB diagnostics_scripts CONFIGURE_DEPENDS
+      "${CMAKE_SOURCE_DIR}/diagnostics/*.ps1" "${CMAKE_SOURCE_DIR}/diagnostics/*.psm1"
+      "${CMAKE_SOURCE_DIR}/diagnostics/*.cmd" "${CMAKE_SOURCE_DIR}/diagnostics/*.md")
+  copy_to_build_dir(${diagnostics_scripts} SUBDIR diagnostics)
+
   # Generate the target that will actually do the copying.
   generate_copy_to_build_dir_target(copy_to_build_dir)
 
   install(PROGRAMS ${ADDITIONAL_RUNTIME_LIBS_RELEASE} TYPE BIN CONFIGURATIONS Release MinSizeRel RelWithDebInfo)
   install(PROGRAMS ${ADDITIONAL_RUNTIME_LIBS_DEBUG} TYPE BIN CONFIGURATIONS Debug)
+
+  # Shipped in both packages so a slow or leaking PC can be measured with the
+  # build it actually runs, not a developer's copy (see diagnostics/SCHEMA.md).
+  # Deliberately without a COMPONENT: they belong with the application in
+  # "Unspecified", and a component of their own would become one more checkbox
+  # an operator could untick in the installer.
+  install(DIRECTORY "${CMAKE_SOURCE_DIR}/diagnostics/" DESTINATION "diagnostics"
+      FILES_MATCHING PATTERN "*.ps1" PATTERN "*.psm1" PATTERN "*.cmd" PATTERN "*.md")
 endif()
 
 if (UNIX)

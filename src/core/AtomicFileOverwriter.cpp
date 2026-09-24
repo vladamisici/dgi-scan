@@ -8,6 +8,7 @@
 #include <QObject>
 #include <QTemporaryFile>
 
+#include "Diagnostics.h"
 #include "Utils.h"
 
 #ifdef Q_OS_WIN
@@ -101,10 +102,17 @@ QIODevice* AtomicFileOverwriter::startWriting(const QString& filePath) {
 }
 
 bool AtomicFileOverwriter::commit(const Durability durability) {
+  DIAG_SCOPE(diagScope, "file.atomic_commit");
+  diagScope.attr(core::diag::Attr("durable", durability == Durability::Durable));
+  const auto finish = [&diagScope](const bool ok) {
+    diagScope.attr(core::diag::Attr("ok", ok));
+    return ok;
+  };
+
   if (!m_tempFile) {
     m_errorString = QObject::tr("nothing was being written");
     m_failureStage = FailureStage::Write;
-    return false;
+    return finish(false);
   }
   m_errorString.clear();
   m_failureStage = FailureStage::None;
@@ -115,12 +123,19 @@ bool AtomicFileOverwriter::commit(const Durability durability) {
   // A write error that only surfaces at flush time - a full disk, a quota, a
   // share that went away mid-write - must not be promoted into a rename over
   // good data.
-  bool written = m_tempFile->flush() && (m_tempFile->error() == QFileDevice::NoError);
+  bool written = false;
+  {
+    DIAG_SCOPE(flushScope, "file.atomic_commit.flush");
+    written = m_tempFile->flush() && (m_tempFile->error() == QFileDevice::NoError);
+  }
   if (!written) {
     m_errorString = QObject::tr("could not write \"%1\" (%2)").arg(tempFilePath, m_tempFile->errorString());
     m_failureStage = FailureStage::Write;
   }
   if (written && (durability == Durability::Durable)) {
+    // Spans the error handling as well as the barrier: ending the scope between
+    // them could reset the last-error value the failure message is built from.
+    DIAG_SCOPE(syncScope, "file.atomic_commit.sync");
     switch (syncToDisk(*m_tempFile)) {
       case SyncResult::Synced:
         break;
@@ -148,20 +163,25 @@ bool AtomicFileOverwriter::commit(const Durability durability) {
 
   if (!written) {
     QFile::remove(tempFilePath);
-    return false;
+    return finish(false);
   }
 
   QString renameError;
-  if (!Utils::overwritingRename(tempFilePath, targetPath, &renameError,
-                                (durability == Durability::Durable) ? Utils::RenameRetry::Retry
-                                                                   : Utils::RenameRetry::Once)) {
+  bool renamed = false;
+  {
+    DIAG_SCOPE(renameScope, "file.atomic_commit.rename");
+    renamed = Utils::overwritingRename(tempFilePath, targetPath, &renameError,
+                                       (durability == Durability::Durable) ? Utils::RenameRetry::Retry
+                                                                          : Utils::RenameRetry::Once);
+  }
+  if (!renamed) {
     m_errorString
         = QObject::tr("could not replace \"%1\" with the file just written (%2)").arg(targetPath, renameError);
     m_failureStage = FailureStage::Replace;
     QFile::remove(tempFilePath);
-    return false;
+    return finish(false);
   }
-  return true;
+  return finish(true);
 }
 
 void AtomicFileOverwriter::abort() {

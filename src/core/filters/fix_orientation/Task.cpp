@@ -7,6 +7,7 @@
 
 #include <utility>
 
+#include "Diagnostics.h"
 #include "Dpm.h"
 #include "Filter.h"
 #include "FilterUiInterface.h"
@@ -59,6 +60,11 @@ Task::~Task() = default;
 
 FilterResultPtr Task::process(const TaskStatus& status, FilterData data) {
   // This function is executed from the worker thread.
+  // Inclusive of the later stages, which are called from here; see diagnostics/SCHEMA.md.
+  DIAG_SCOPE(diagScope, "stage.fix_orientation");
+  // Always written, even at the basic level: a stage's own time is its duration
+  // minus the next stage's, so a missing record would be charged to the stage above.
+  diagScope.forceRecord();
   status.throwIfCancelled();
 
   updateFilterData(data);

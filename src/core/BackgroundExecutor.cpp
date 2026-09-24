@@ -8,6 +8,7 @@
 #include <QThread>
 #include <cassert>
 
+#include "Diagnostics.h"
 #include "OutOfMemoryHandler.h"
 
 class BackgroundExecutor::Dispatcher : public QObject {
@@ -63,6 +64,7 @@ void BackgroundExecutor::enqueueTask(const TaskPtr& task) {
 BackgroundExecutor::Dispatcher::Dispatcher(Impl& owner) : m_owner(owner) {}
 
 void BackgroundExecutor::Dispatcher::customEvent(QEvent* event) {
+  DIAG_COUNT("bgexec.task");
   try {
     auto* evt = dynamic_cast<TaskEvent*>(event);
     assert(evt);
@@ -107,6 +109,8 @@ void BackgroundExecutor::Impl::enqueueTask(const TaskPtr& task) {
 }
 
 void BackgroundExecutor::Impl::run() {
+  // The Dispatcher lives on this thread, so every task runs under this role.
+  core::diag::setThreadRole("bgexec");
   exec();
 }
 
