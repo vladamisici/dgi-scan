@@ -3,6 +3,7 @@
 
 #include "ProjectWriter.h"
 
+#include <QBuffer>
 #include <QFile>
 #include <QFileInfo>
 #include <QTextStream>
@@ -96,8 +97,26 @@ bool ProjectWriter::write(const QString& filePath,
     }
   }
 
-  // The size is recorded together with the outcome, on the way out, because a
-  // failed commit falls back to writing in place and serialises a second time.
+  // Serialised into memory first and handed to the file in one write.
+  // QDomDocument::save() ends every line with Qt::endl, which flushes the
+  // stream, so saving straight into the file issued one WriteFile per line of
+  // XML. On a network share each of those is a round trip: a 1.9 MB project -
+  // tens of thousands of lines - took 33 seconds to save over SMB, with the GUI
+  // frozen throughout, on every autosave.
+  //
+  // Note that the QTextStream codec is deliberately left at its default so the
+  // on-disk encoding stays byte-for-byte what previous versions produced.
+  QByteArray data;
+  {
+    DIAG_SCOPE(serializeScope, "project.writer.write.serialize");
+    QBuffer buffer(&data);
+    buffer.open(QIODevice::WriteOnly);
+    QTextStream strm(&buffer);
+    doc.save(strm, 2);
+    strm.flush();
+  }
+
+  // The size is recorded together with the outcome, on the way out.
   qint64 bytesWritten = -1;
   const auto finish = [&diagScope, &bytesWritten](const bool ok) {
     if (bytesWritten >= 0) {
@@ -115,9 +134,6 @@ bool ProjectWriter::write(const QString& filePath,
   // with a truncated or empty project and the work of a whole title gone. With a
   // temp file plus rename, an interrupted save leaves the previous project
   // untouched: the worst case is losing the current save, not the project.
-  //
-  // Note that the QTextStream codec is deliberately left at its default so the
-  // on-disk encoding stays byte-for-byte what previous versions produced.
   const auto fail = [errorMessage, &finish](const QString& reason) {
     if (errorMessage) {
       *errorMessage = reason;
@@ -136,11 +152,8 @@ bool ProjectWriter::write(const QString& filePath,
       return fail(QObject::tr("%1; and writing to it directly failed too (%2)").arg(why, file.errorString()));
     }
     {
-      DIAG_SCOPE(serializeScope, "project.writer.write.serialize");
-      QTextStream strm(&file);
-      doc.save(strm, 2);
-      strm.flush();
-      if (strm.status() != QTextStream::Ok) {
+      DIAG_SCOPE(storeScope, "project.writer.write.store");
+      if (file.write(data) != data.size()) {
         return fail(QObject::tr("could not write the project data to \"%1\"").arg(filePath));
       }
       bytesWritten = file.pos();
@@ -168,11 +181,8 @@ bool ProjectWriter::write(const QString& filePath,
   }
 
   {
-    DIAG_SCOPE(serializeScope, "project.writer.write.serialize");
-    QTextStream strm(device);
-    doc.save(strm, 2);
-    strm.flush();
-    if (strm.status() != QTextStream::Ok) {
+    DIAG_SCOPE(storeScope, "project.writer.write.store");
+    if (device->write(data) != data.size()) {
       overwriter.abort();
       return fail(QObject::tr("could not write the project data to \"%1\"").arg(filePath));
     }
