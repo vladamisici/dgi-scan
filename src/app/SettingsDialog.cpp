@@ -28,6 +28,7 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     const QString openglDevicePattern = ui.openglDeviceLabel->text();
     ui.openglDeviceLabel->setText(openglDevicePattern.arg(OpenGLSupport::deviceName()));
   }
+  ui.lowResDisplayCB->setChecked(settings.isLowResDisplayEnabled());
 
   ui.colorSchemeBox->addItem(tr("Dark"), "dark");
   ui.colorSchemeBox->addItem(tr("Light"), "light");
@@ -91,6 +92,7 @@ void SettingsDialog::commitChanges() {
   ApplicationSettings& settings = ApplicationSettings::getInstance();
 
   settings.setOpenGlEnabled(ui.enableOpenglCb->isChecked());
+  settings.setLowResDisplayEnabled(ui.lowResDisplayCB->isChecked());
   settings.setAutoSaveProjectEnabled(ui.autoSaveProjectCB->isChecked());
   settings.setHighlightDeviationEnabled(ui.highlightDeviationCB->isChecked());
   settings.setColorScheme(ui.colorSchemeBox->currentData().toString());

@@ -38,9 +38,43 @@ class Utils {
   static std::shared_ptr<ThumbnailPixmapCache> createThumbnailCache(const QString& outputDir);
 
   /**
+   * \brief Whether a blocked rename is worth waiting out.
+   */
+  enum class RenameRetry {
+    /**
+     * Try once and report the failure. For files the application can simply
+     * write again later, where sleeping on the calling thread buys nothing: a
+     * regenerable cache entry that loses a race with a virus scanner is of no
+     * consequence, while the sleep is paid on every one of them.
+     */
+    Once,
+    /**
+     * Retry briefly while the block looks transient. For the operator's own
+     * work, where a scanner holding the file open for a moment must not be
+     * allowed to turn into a lost save.
+     */
+    Retry
+  };
+
+  /**
    * Unlike QFile::rename(), this one overwrites existing files.
    */
-  static bool overwritingRename(const QString& from, const QString& to);
+  static bool overwritingRename(const QString& from,
+                                const QString& to,
+                                QString* errorMessage = nullptr,
+                                RenameRetry retry = RenameRetry::Retry);
+
+  /**
+   * \brief The operating system's description of the last error, for reporting.
+   *
+   * Qt does not surface GetLastError, so a failed MoveFileExW would otherwise
+   * be indistinguishable from any other - "access denied" and "the file is in
+   * use" call for completely different answers.
+   */
+  static QString lastSystemErrorString();
+
+  /** \brief Describes a specific system error code. \see lastSystemErrorString() */
+  static QString systemErrorString(unsigned long code);
 
   /**
    * \brief Generate rich text, complete with headers and stuff,

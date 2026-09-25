@@ -7,6 +7,7 @@
 
 #include "CompositeCacheDrivenTask.h"
 #include "ContentBoxCollector.h"
+#include "Diagnostics.h"
 #include "ImageTransformation.h"
 #include "PageSequence.h"
 #include "ProjectPages.h"
@@ -38,6 +39,7 @@ ContentBoxPropagator::ContentBoxPropagator(std::shared_ptr<page_layout::Filter> 
 ContentBoxPropagator::~ContentBoxPropagator() = default;
 
 void ContentBoxPropagator::propagate(const ProjectPages& pages) {
+  DIAG_SCOPE(diagScope, "propagate.content_box");
   const PageSequence sequence(pages.toPageSequence(PAGE_VIEW));
 
   for (const PageInfo& pageInfo : sequence) {

@@ -7,6 +7,7 @@
 #include <QMouseEvent>
 
 #include "DragHandler.h"
+#include <cmath>
 
 DragWatcher::DragWatcher(DragHandler& dragHandler)
     : m_dragHandler(dragHandler), m_dragMaxSqDist(0), m_dragInProgress(false) {}

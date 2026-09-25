@@ -37,6 +37,7 @@
 #include "PageLayout.h"
 #include "ProjectPages.h"
 #include "VertLineFinder.h"
+#include <cmath>
 
 namespace page_split {
 using namespace imageproc;

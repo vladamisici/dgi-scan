@@ -23,15 +23,26 @@ void OutOfMemoryHandler::allocateEmergencyMemory(size_t bytes) {
 }
 
 void OutOfMemoryHandler::handleOutOfMemorySituation() {
-  const QMutexLocker locker(&m_mutex);
+  {
+    const QMutexLocker locker(&m_mutex);
 
-  if (m_hadOOM) {
-    return;
+    if (m_hadOOM) {
+      return;
+    }
+
+    m_hadOOM = true;
+    boost::scoped_array<char>().swap(m_emergencyBuffer);
   }
 
-  m_hadOOM = true;
-  boost::scoped_array<char>().swap(m_emergencyBuffer);
-  QMetaObject::invokeMethod(this, "outOfMemory", Qt::QueuedConnection);
+  // Deliberately outside the lock, and guarded. A queued invocation allocates a
+  // QMetaCallEvent, and this function is called from inside catch(bad_alloc)
+  // handlers on worker threads - where an exception escaping has nothing above
+  // it but std::terminate, killing the process before the rescue dialog it was
+  // trying to raise ever appears.
+  try {
+    QMetaObject::invokeMethod(this, "outOfMemory", Qt::QueuedConnection);
+  } catch (...) {
+  }
 }
 
 bool OutOfMemoryHandler::hadOutOfMemorySituation() const {

@@ -16,6 +16,7 @@
 #include "spfit/LinearForceBalancer.h"
 #include "spfit/PolylineModelShape.h"
 #include "spfit/SplineFitter.h"
+#include <stdexcept>
 
 namespace output {
 DewarpingView::DewarpingView(const QImage& image,

@@ -19,6 +19,7 @@
 #include <boost/multi_index_container.hpp>
 
 #include "AtomicFileOverwriter.h"
+#include "Diagnostics.h"
 #include "ImageId.h"
 #include "ImageLoader.h"
 #include "OutOfMemoryHandler.h"
@@ -148,6 +149,8 @@ class ThumbnailPixmapCache::Impl : public QThread {
   void queuedToInProgress(const LoadQueue::iterator& lqIt);
 
   void postLoadResult(const LoadQueue::iterator& lqIt, const QImage& image, ThumbnailLoadResult::Status status);
+
+  bool retireFailedItem(const LoadQueue::iterator& lqIt, bool itemInProgress);
 
   void processLoadResult(LoadResultEvent* result);
 
@@ -323,6 +326,9 @@ ThumbnailPixmapCache::Impl::~Impl() {
     m_shuttingDown = true;
   }
 
+  // Joining the thread waits for the thumbnail it is loading, which can be slow
+  // on a network share, and the last reference is often dropped on the GUI thread.
+  DIAG_SCOPE(diagScope, "thumbs.cache.destroy");
   quit();
   wait();
 }
@@ -432,48 +438,59 @@ ThumbnailPixmapCache::Status ThumbnailPixmapCache::Impl::request(
 }  // ThumbnailPixmapCache::Impl::request
 
 void ThumbnailPixmapCache::Impl::ensureThumbnailExists(const ImageId& imageId, const QImage& image) {
-  if (m_shuttingDown) {
-    return;
-  }
-
+  DIAG_SCOPE(diagScope, "thumbs.ensure_exists");
   if (image.isNull()) {
     return;
   }
 
   QMutexLocker locker(&m_mutex);
+  // m_shuttingDown is written by the GUI thread and read here from a worker, so
+  // it has to be read under the same mutex as the other members.
+  if (m_shuttingDown) {
+    return;
+  }
   const QString thumbDir(m_thumbDir);
   const QSize maxThumbSize(m_maxThumbSize);
   locker.unlock();
 
-  const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, m_maxThumbSize));
+  // The local copy, not the member: the member can change under us between here
+  // and makeThumbnail() below, which would name the file after one size and
+  // store an image scaled to another.
+  const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, maxThumbSize));
   if (QFile::exists(thumbFilePath)) {
     return;
   }
 
   const QImage thumbnail(makeThumbnail(image, maxThumbSize));
 
+  // Buffered, not durable. A thumbnail is a cache entry the application
+  // regenerates from the source image whenever it is missing, so there is
+  // nothing here worth a flush barrier - and the barrier is not cheap: it makes
+  // the drive commit its write cache, which on a mechanical disk or a network
+  // share costs tens of milliseconds, paid once per page of every title.
   AtomicFileOverwriter overwriter;
   QIODevice* iodev = overwriter.startWriting(thumbFilePath);
   if (iodev && thumbnail.save(iodev, "PNG")) {
-    overwriter.commit();
+    overwriter.commit(AtomicFileOverwriter::Durability::Buffered);
   }
 }
 
 void ThumbnailPixmapCache::Impl::recreateThumbnail(const ImageId& imageId, const QImage& image) {
-  if (m_shuttingDown) {
-    return;
-  }
-
+  DIAG_SCOPE(diagScope, "thumbs.recreate");
   if (image.isNull()) {
     return;
   }
 
   QMutexLocker locker(&m_mutex);
+  if (m_shuttingDown) {
+    return;
+  }
   const QString thumbDir(m_thumbDir);
   const QSize maxThumbSize(m_maxThumbSize);
   locker.unlock();
 
-  const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, m_maxThumbSize));
+  // See the note in ensureThumbnailExists() on using the local copy here.
+  const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, maxThumbSize));
   const QImage thumbnail(makeThumbnail(image, maxThumbSize));
   bool thumbWritten = false;
 
@@ -481,7 +498,8 @@ void ThumbnailPixmapCache::Impl::recreateThumbnail(const ImageId& imageId, const
   AtomicFileOverwriter overwriter;
   QIODevice* iodev = overwriter.startWriting(thumbFilePath);
   if (iodev && thumbnail.save(iodev, "PNG")) {
-    thumbWritten = overwriter.commit();
+    // See the note in ensureThumbnailExists() on why this is not durable.
+    thumbWritten = overwriter.commit(AtomicFileOverwriter::Durability::Buffered);
   } else {
     overwriter.abort();
   }
@@ -516,6 +534,9 @@ void ThumbnailPixmapCache::Impl::recreateThumbnail(const ImageId& imageId, const
 }  // ThumbnailPixmapCache::Impl::recreateThumbnail
 
 void ThumbnailPixmapCache::Impl::run() {
+  // Covers backgroundProcessing() when BackgroundLoader calls it as well: that
+  // object lives on this thread, so its events are delivered here.
+  ::core::diag::setThreadRole("thumbs");
   backgroundProcessing();
   exec();  // Wait for further processing requests (via custom events).
 }
@@ -529,9 +550,12 @@ void ThumbnailPixmapCache::Impl::backgroundProcessing() {
   assert(QCoreApplication::instance()->thread() != QThread::currentThread());
 
   while (true) {
+    // Declared out here so the handlers below can retire the in-flight item.
+    LoadQueue::iterator lqIt;
+    bool itemInProgress = false;
+
     try {
       // We are going to initialize these while holding the mutex.
-      LoadQueue::iterator lqIt;
       ImageId imageId;
       QString thumbDir;
       QSize maxThumbSize;
@@ -558,6 +582,7 @@ void ThumbnailPixmapCache::Impl::backgroundProcessing() {
         // from being processed again before the GUI thread
         // receives our LoadResultEvent.
         queuedToInProgress(lqIt);
+        itemInProgress = true;
 
         if (m_totalLoadAttempts - lqIt->precedingLoadAttempts > m_expirationThreshold) {
           // Expire this request.  The reasoning behind
@@ -583,20 +608,61 @@ void ThumbnailPixmapCache::Impl::backgroundProcessing() {
       postLoadResult(lqIt, image, status);
     } catch (const std::bad_alloc&) {
       OutOfMemoryHandler::instance().handleOutOfMemorySituation();
+      if (!retireFailedItem(lqIt, itemInProgress)) {
+        break;
+      }
+    } catch (const std::exception& e) {
+      // A truncated TIFF, or a share that disappears mid-read, makes the loaders
+      // throw; that used to terminate the process from this thread.
+      qCritical() << "Thumbnail loading failed:" << e.what();
+      if (!retireFailedItem(lqIt, itemInProgress)) {
+        break;
+      }
+    } catch (...) {
+      qCritical() << "Thumbnail loading failed with an unknown exception";
+      if (!retireFailedItem(lqIt, itemInProgress)) {
+        break;
+      }
     }
   }
 }  // ThumbnailPixmapCache::Impl::backgroundProcessing
 
+/**
+ * \brief Reports a failed load so the item leaves the IN_PROGRESS state.
+ *
+ * Only postLoadResult() ever moves an item out of IN_PROGRESS. Returning from a
+ * handler without doing so would strand the item forever: its completion
+ * handlers would never run, request() would keep returning QUEUED for it without
+ * ever waking this thread again, and the handler vector would grow without
+ * bound. LOAD_FAILED is exactly the status this case exists for.
+ *
+ * \return true if an item was retired, and therefore the loop is guaranteed to
+ *         have made progress and may safely continue. False means the failure
+ *         happened before any item was claimed, where continuing would spin.
+ */
+bool ThumbnailPixmapCache::Impl::retireFailedItem(const LoadQueue::iterator& lqIt, bool itemInProgress) {
+  if (!itemInProgress) {
+    return false;
+  }
+  postLoadResult(lqIt, QImage(), ThumbnailLoadResult::LOAD_FAILED);
+  return true;
+}
+
 QImage ThumbnailPixmapCache::Impl::loadSaveThumbnail(const ImageId& imageId,
                                                      const QString& thumbDir,
                                                      const QSize& maxThumbSize) {
+  DIAG_SCOPE(diagScope, "thumbs.bg.load");
   const QString thumbFilePath(getThumbFilePath(imageId, thumbDir, maxThumbSize));
 
   QImage image(ImageLoader::load(thumbFilePath, 0));
   if (!image.isNull()) {
+    diagScope.attr(::core::diag::Attr("source", "cache"));
     return image;
   }
 
+  // A cache miss decodes the whole source image and writes a new thumbnail;
+  // telling the two apart is what shows whether the thumbnail cache is working.
+  diagScope.attr(::core::diag::Attr("source", "image"));
   image = ImageLoader::load(imageId);
   if (image.isNull()) {
     return QImage();
@@ -672,6 +738,7 @@ void ThumbnailPixmapCache::Impl::postLoadResult(const LoadQueue::iterator& lqIt,
 
 void ThumbnailPixmapCache::Impl::processLoadResult(LoadResultEvent* result) {
   assert(QCoreApplication::instance()->thread() == QThread::currentThread());
+  DIAG_COUNT("thumbs.load_result");
 
   QPixmap pixmap(QPixmap::fromImage(result->image()));
   result->releaseImage();

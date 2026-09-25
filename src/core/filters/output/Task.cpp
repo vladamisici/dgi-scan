@@ -6,8 +6,10 @@
 #include <DewarpingPointMapper.h>
 #include <PolygonUtils.h>
 #include <UnitsProvider.h>
+#include <core/Diagnostics.h>
 #include <core/TiffWriter.h>
 
+#include <QDebug>
 #include <QDir>
 #include <boost/bind.hpp>
 #include <utility>
@@ -110,6 +112,10 @@ Task::Task(std::shared_ptr<Filter> filter,
 Task::~Task() = default;
 
 FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data, const QPolygonF& contentRectPhys) {
+  DIAG_SCOPE(diagScope, "stage.output");
+  // Always written, even at the basic level: a stage's own time is its duration
+  // minus the next stage's, so a missing record would be charged to the stage above.
+  diagScope.forceRecord();
   status.throwIfCancelled();
 
   Params params = m_settings->getParams(m_pageId);
@@ -318,10 +324,13 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data, 
 
     bool invalidateParams = false;
     {
-      std::unique_ptr<OutputImage> outputImage
-          = generator.process(status, data, newPictureZones, newFillZones, distortionModel, params.depthPerception(),
-                              writeAutomask ? &automaskImg : nullptr, writeSpecklesFile ? &specklesImg : nullptr,
-                              m_dbg.get(), m_pageId, m_settings);
+      std::unique_ptr<OutputImage> outputImage;
+      {
+        DIAG_SCOPE(generateScope, "output.generate");
+        outputImage = generator.process(status, data, newPictureZones, newFillZones, distortionModel,
+                                        params.depthPerception(), writeAutomask ? &automaskImg : nullptr,
+                                        writeSpecklesFile ? &specklesImg : nullptr, m_dbg.get(), m_pageId, m_settings);
+      }
 
       params = m_settings->getParams(m_pageId);
 
@@ -340,22 +349,39 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data, 
       newOutputImageParams.setOutputProcessingParams(m_settings->getOutputProcessingParams(m_pageId));
 
       if (renderParams.splitOutput()) {
+        // A dynamic_cast that fails yields nullptr, and dereferencing it here
+        // terminated the process outright. Treat a mismatch as a failed page -
+        // its parameters are invalidated so it is reprocessed - instead.
         auto* outputImageWithForeground = dynamic_cast<OutputImageWithForeground*>(outputImage.get());
-
-        QDir().mkdir(foregroundDir);
-        QDir().mkdir(backgroundDir);
-        if (!TiffWriter::writeImage(foregroundFilePath, outputImageWithForeground->getForegroundImage())
-            || !TiffWriter::writeImage(backgroundFilePath, outputImageWithForeground->getBackgroundImage())) {
+        if (!outputImageWithForeground) {
+          qCritical() << "Split output requested but the generated image has no foreground layer; page"
+                      << m_pageId.imageId().filePath();
           invalidateParams = true;
-        }
-
-        if (renderParams.originalBackground()) {
-          auto* outputImageWithOrigBg = dynamic_cast<OutputImageWithOriginalBackground*>(outputImage.get());
-
-          QDir().mkdir(originalBackgroundDir);
-          if (!TiffWriter::writeImage(originalBackgroundFilePath,
-                                      outputImageWithOrigBg->getOriginalBackgroundImage())) {
+        } else {
+          // The split layers are written here, while the generated image is
+          // still alive; the main output file is written further down under
+          // the same operation name.
+          DIAG_SCOPE(layersWriteScope, "output.write");
+          QDir().mkdir(foregroundDir);
+          QDir().mkdir(backgroundDir);
+          if (!TiffWriter::writeImage(foregroundFilePath, outputImageWithForeground->getForegroundImage())
+              || !TiffWriter::writeImage(backgroundFilePath, outputImageWithForeground->getBackgroundImage())) {
             invalidateParams = true;
+          }
+
+          if (renderParams.originalBackground()) {
+            auto* outputImageWithOrigBg = dynamic_cast<OutputImageWithOriginalBackground*>(outputImage.get());
+            if (!outputImageWithOrigBg) {
+              qCritical() << "Original background requested but the generated image has no such layer; page"
+                          << m_pageId.imageId().filePath();
+              invalidateParams = true;
+            } else {
+              QDir().mkdir(originalBackgroundDir);
+              if (!TiffWriter::writeImage(originalBackgroundFilePath,
+                                          outputImageWithOrigBg->getOriginalBackgroundImage())) {
+                invalidateParams = true;
+              }
+            }
           }
         }
       }
@@ -363,44 +389,47 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data, 
       outImg = *outputImage;
     }
 
-    if (!renderParams.originalBackground()) {
-      QFile::remove(originalBackgroundFilePath);
-    }
-    if (!renderParams.splitOutput()) {
-      QFile::remove(foregroundFilePath);
-      QFile::remove(backgroundFilePath);
-    }
-
-    if (!TiffWriter::writeImage(outFilePath, outImg)) {
-      invalidateParams = true;
-    } else {
-      deleteMutuallyExclusiveOutputFiles();
-    }
-
-    if (writeSpecklesFile && specklesImg.isNull()) {
-      // Even if despeckling didn't actually take place, we still need
-      // to write an empty speckles file.  Making it a special case
-      // is simply not worth it.
-      BinaryImage(outImg.size(), WHITE).swap(specklesImg);
-    }
-
-    if (writeAutomask) {
-      // Note that QDir::mkdir() will fail if the parent directory,
-      // that is $OUT/cache doesn't exist. We want that behaviour,
-      // as otherwise when loading a project from a different machine,
-      // a whole bunch of bogus directories would be created.
-      QDir().mkdir(automaskDir);
-      // Also note that QDir::mkdir() will fail if the directory already exists,
-      // so we ignore its return value here.
-      if (!TiffWriter::writeImage(automaskFilePath, automaskImg.toQImage())) {
-        invalidateParams = true;
+    {
+      DIAG_SCOPE(writeScope, "output.write");
+      if (!renderParams.originalBackground()) {
+        QFile::remove(originalBackgroundFilePath);
       }
-    }
-    if (writeSpecklesFile) {
-      if (!QDir().mkpath(specklesDir)) {
+      if (!renderParams.splitOutput()) {
+        QFile::remove(foregroundFilePath);
+        QFile::remove(backgroundFilePath);
+      }
+
+      if (!TiffWriter::writeImage(outFilePath, outImg)) {
         invalidateParams = true;
-      } else if (!TiffWriter::writeImage(specklesFilePath, specklesImg.toQImage())) {
-        invalidateParams = true;
+      } else {
+        deleteMutuallyExclusiveOutputFiles();
+      }
+
+      if (writeSpecklesFile && specklesImg.isNull()) {
+        // Even if despeckling didn't actually take place, we still need
+        // to write an empty speckles file.  Making it a special case
+        // is simply not worth it.
+        BinaryImage(outImg.size(), WHITE).swap(specklesImg);
+      }
+
+      if (writeAutomask) {
+        // Note that QDir::mkdir() will fail if the parent directory,
+        // that is $OUT/cache doesn't exist. We want that behaviour,
+        // as otherwise when loading a project from a different machine,
+        // a whole bunch of bogus directories would be created.
+        QDir().mkdir(automaskDir);
+        // Also note that QDir::mkdir() will fail if the directory already exists,
+        // so we ignore its return value here.
+        if (!TiffWriter::writeImage(automaskFilePath, automaskImg.toQImage())) {
+          invalidateParams = true;
+        }
+      }
+      if (writeSpecklesFile) {
+        if (!QDir().mkpath(specklesDir)) {
+          invalidateParams = true;
+        } else if (!TiffWriter::writeImage(specklesFilePath, specklesImg.toQImage())) {
+          invalidateParams = true;
+        }
       }
     }
 
@@ -425,10 +454,18 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data, 
     m_thumbnailCache->recreateThumbnail(ImageId(outFilePath), outImg);
   }
 
-  const DespeckleState despeckleState(outImg, specklesImg, params.despeckleLevel(), params.outputDpi());
+  // DespeckleState's images exist only to drive the despeckling UI, and
+  // UiUpdater::updateUI() returns immediately when batch processing - so during a
+  // batch run every page built a full RGB32 copy of its output image (a 32x
+  // inflation of 1-bit output, roughly 140 MB for a 600 dpi A4 page), on every
+  // worker thread, only to throw it away. Skipping that is a large part of
+  // keeping big titles inside available memory.
+  const DespeckleState despeckleState
+      = m_batchProcessing ? DespeckleState(params.despeckleLevel(), params.outputDpi())
+                          : DespeckleState(outImg, specklesImg, params.despeckleLevel(), params.outputDpi());
 
   DespeckleVisualization despeckleVisualization;
-  if (m_lastTab == TAB_DESPECKLING) {
+  if (!m_batchProcessing && (m_lastTab == TAB_DESPECKLING)) {
     // Because constructing DespeckleVisualization takes a noticeable
     // amount of time, we only do it if we are sure we'll need it.
     // Otherwise it will get constructed on demand.
@@ -478,11 +515,16 @@ Task::UiUpdater::UiUpdater(std::shared_ptr<Filter> filter,
       m_xform(xform),
       m_virtContentRect(virtContentRect),
       m_pageId(pageId),
-      m_origImage(origImage),
-      m_downscaledOrigImage(ImageView::createDownscaledImage(origImage)),
-      m_outputImage(outputImage),
-      m_downscaledOutputImage(ImageView::createDownscaledImage(outputImage)),
-      m_pictureMask(pictureMask),
+      // None of these display-only members is read when batch processing:
+      // updateUI() returns right after invalidateThumbnail(). Populating them
+      // anyway held full-resolution images alive across the hop to the GUI
+      // thread and built two downscaled copies per page on top, once per worker
+      // thread - pure waste on exactly the long runs that run out of memory.
+      m_origImage(batch ? QImage() : origImage),
+      m_downscaledOrigImage(batch ? QImage() : ImageView::createDownscaledImage(origImage)),
+      m_outputImage(batch ? QImage() : outputImage),
+      m_downscaledOutputImage(batch ? QImage() : ImageView::createDownscaledImage(outputImage)),
+      m_pictureMask(batch ? BinaryImage() : pictureMask),
       m_despeckleState(despeckleState),
       m_despeckleVisualization(despeckleVisualization),
       m_batchProcessing(batch),

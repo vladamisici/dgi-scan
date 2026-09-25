@@ -7,6 +7,7 @@
 
 #include "FrenetFrame.h"
 #include "ToLineProjector.h"
+#include <stdexcept>
 
 namespace spfit {
 PolylineModelShape::PolylineModelShape(const std::vector<QPointF>& polyline) {

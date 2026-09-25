@@ -15,6 +15,7 @@
 #ifndef Q_MOC_RUN
 
 #include <boost/bind.hpp>
+#include <cmath>
 
 #endif
 

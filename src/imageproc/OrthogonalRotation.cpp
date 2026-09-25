@@ -5,6 +5,7 @@
 
 #include "BinaryImage.h"
 #include "RasterOp.h"
+#include <stdexcept>
 
 namespace imageproc {
 static inline uint32_t mask(int x) {

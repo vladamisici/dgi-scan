@@ -20,6 +20,8 @@
 #include "spfit/PolylineModelShape.h"
 #include "spfit/SplineFitter.h"
 #include "spfit/SqDistApproximant.h"
+#include <cmath>
+#include <stdexcept>
 
 using namespace imageproc;
 

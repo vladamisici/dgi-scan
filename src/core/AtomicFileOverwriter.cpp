@@ -3,12 +3,96 @@
 
 #include "AtomicFileOverwriter.h"
 
+#include <QDebug>
 #include <QFile>
-#include <QTemporaryFile>
+#include <QObject>
+#include <QRandomGenerator>
 
+#include "Diagnostics.h"
 #include "Utils.h"
 
+#ifdef Q_OS_WIN
+#include <io.h>
+#include <windows.h>
+#else
+#include <cerrno>
+#include <unistd.h>
+#endif
+
 using namespace core;
+
+namespace {
+/**
+ * \brief Asks the OS to put the file's contents on the storage device.
+ *
+ * A durability barrier, not a write: it makes the rename in commit() safe
+ * against the machine losing power or a network share dropping between the data
+ * being handed to the OS and the rename landing.
+ *
+ * Deliberately advisory. Some filesystems and network redirectors do not
+ * implement the barrier and fail the call even though the write itself is fine,
+ * and refusing to save on those would be a worse bug than the one this guards
+ * against. Genuine write failures are caught separately, by flushing the file
+ * and inspecting its error state.
+ */
+enum class SyncResult {
+  Synced,        /**< The data is on the storage device. */
+  Unsupported,   /**< This filesystem has no flush barrier; the write is still fine. */
+  Failed         /**< The flush genuinely failed - the data may not be there. */
+};
+
+SyncResult syncToDisk(QFile& file) {
+  const int fd = file.handle();
+  if (fd < 0) {
+    return SyncResult::Unsupported;
+  }
+
+#ifdef Q_OS_WIN
+  const HANDLE handle = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+  if (handle == INVALID_HANDLE_VALUE) {
+    return SyncResult::Unsupported;
+  }
+  if (::FlushFileBuffers(handle) != 0) {
+    return SyncResult::Synced;
+  }
+  const DWORD error = ::GetLastError();
+  // Some filesystems and network redirectors simply do not implement the
+  // barrier and say so. That is not a write failure and must not stop the save.
+  if ((error == ERROR_INVALID_FUNCTION) || (error == ERROR_NOT_SUPPORTED)) {
+    return SyncResult::Unsupported;
+  }
+  return SyncResult::Failed;
+#else
+  if (::fsync(fd) == 0) {
+    return SyncResult::Synced;
+  }
+  if ((errno == EINVAL) || (errno == ENOTSUP) || (errno == EBADF)) {
+    return SyncResult::Unsupported;
+  }
+  return SyncResult::Failed;
+#endif
+}
+
+/**
+ * \brief The target's path with a random suffix, in the same directory.
+ *
+ * Built here rather than left to QTemporaryFile, which mishandles UNC paths on
+ * Windows: given "\\server\share\..." it cannot create the file at all, and
+ * given "//server/share/..." it creates it but reports its name as
+ * "UNC/server/share/...", so the rename and the clean-up both fail with "path
+ * not found" and the temporary file is left behind on the share. On such
+ * shares no save ever took the atomic route. Composing the name ourselves keeps
+ * it exactly as the caller spelled the target, whichever separators that uses.
+ */
+QString tempPathFor(const QString& targetPath) {
+  static const char alphabet[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  QString suffix(QLatin1Char('.'));
+  for (int i = 0; i < 6; ++i) {
+    suffix += QLatin1Char(alphabet[QRandomGenerator::global()->bounded(int(sizeof(alphabet) - 1))]);
+  }
+  return targetPath + suffix;
+}
+}  // namespace
 
 AtomicFileOverwriter::AtomicFileOverwriter() = default;
 
@@ -18,33 +102,115 @@ AtomicFileOverwriter::~AtomicFileOverwriter() {
 
 QIODevice* AtomicFileOverwriter::startWriting(const QString& filePath) {
   abort();
+  m_errorString.clear();
+  m_failureStage = FailureStage::None;
 
-  m_tempFile = std::make_unique<QTemporaryFile>(filePath);
-  m_tempFile->setAutoRemove(false);
-  if (!m_tempFile->open()) {
-    m_tempFile.reset();
+  // NewOnly never opens a file that is already there, so a name collision -
+  // vanishingly unlikely, but a stale leftover could cause one - just means
+  // drawing another name, never writing into someone else's file.
+  static const int maxAttempts = 8;
+  for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+    m_tempFile = std::make_unique<QFile>(tempPathFor(filePath));
+    if (m_tempFile->open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+      m_targetPath = filePath;
+      return m_tempFile.get();
+    }
+    if (!m_tempFile->exists()) {
+      break;
+    }
   }
-  return m_tempFile.get();
+  // Worth spelling out, because this is the step that can fail where simply
+  // overwriting the existing file would have worked: writing here needs to
+  // create a NEW file in the directory, which a share can refuse while still
+  // allowing an existing file to be modified.
+  m_errorString = QObject::tr("could not create a temporary file next to \"%1\" (%2); "
+                              "saving this way needs to create a new file in that folder")
+                      .arg(filePath, m_tempFile->errorString());
+  m_failureStage = FailureStage::Create;
+  m_tempFile.reset();
+  return nullptr;
 }
 
-bool AtomicFileOverwriter::commit() {
+bool AtomicFileOverwriter::commit(const Durability durability) {
+  DIAG_SCOPE(diagScope, "file.atomic_commit");
+  diagScope.attr(core::diag::Attr("durable", durability == Durability::Durable));
+  const auto finish = [&diagScope](const bool ok) {
+    diagScope.attr(core::diag::Attr("ok", ok));
+    return ok;
+  };
+
   if (!m_tempFile) {
-    return false;
+    m_errorString = QObject::tr("nothing was being written");
+    m_failureStage = FailureStage::Write;
+    return finish(false);
   }
+  m_errorString.clear();
+  m_failureStage = FailureStage::None;
 
   const QString tempFilePath(m_tempFile->fileName());
-  const QString targetPath(m_tempFile->fileTemplate());
+  const QString targetPath(m_targetPath);
 
-  // Yes, we have to destroy this object here, because:
-  // 1. Under Windows, open files can't be renamed or deleted.
-  // 2. QTemporaryFile::close() doesn't really close it.
+  // A write error that only surfaces at flush time - a full disk, a quota, a
+  // share that went away mid-write - must not be promoted into a rename over
+  // good data.
+  bool written = false;
+  {
+    DIAG_SCOPE(flushScope, "file.atomic_commit.flush");
+    written = m_tempFile->flush() && (m_tempFile->error() == QFileDevice::NoError);
+  }
+  if (!written) {
+    m_errorString = QObject::tr("could not write \"%1\" (%2)").arg(tempFilePath, m_tempFile->errorString());
+    m_failureStage = FailureStage::Write;
+  }
+  if (written && (durability == Durability::Durable)) {
+    // Spans the error handling as well as the barrier: ending the scope between
+    // them could reset the last-error value the failure message is built from.
+    DIAG_SCOPE(syncScope, "file.atomic_commit.sync");
+    switch (syncToDisk(*m_tempFile)) {
+      case SyncResult::Synced:
+        break;
+      case SyncResult::Unsupported:
+        // The data is written; it may just not be guaranteed on the platter yet.
+        // Refusing to save here would break saving outright on such filesystems.
+        break;
+      case SyncResult::Failed:
+        // A real flush failure means the bytes may never reach the share. Renaming
+        // this file over the operator's project would be the exact data loss the
+        // atomic write exists to prevent.
+        m_errorString = QObject::tr("could not flush \"%1\" to disk (%2)")
+                            .arg(tempFilePath, Utils::lastSystemErrorString());
+        m_failureStage = FailureStage::Write;
+        qCritical() << "Failed to flush" << tempFilePath << "to disk; the save is being abandoned";
+        written = false;
+        break;
+    }
+  }
+
+  // Closed before the rename: under Windows, open files can't be renamed or
+  // deleted.
   m_tempFile.reset();
 
-  if (!Utils::overwritingRename(tempFilePath, targetPath)) {
+  if (!written) {
     QFile::remove(tempFilePath);
-    return false;
+    return finish(false);
   }
-  return true;
+
+  QString renameError;
+  bool renamed = false;
+  {
+    DIAG_SCOPE(renameScope, "file.atomic_commit.rename");
+    renamed = Utils::overwritingRename(tempFilePath, targetPath, &renameError,
+                                       (durability == Durability::Durable) ? Utils::RenameRetry::Retry
+                                                                          : Utils::RenameRetry::Once);
+  }
+  if (!renamed) {
+    m_errorString
+        = QObject::tr("could not replace \"%1\" with the file just written (%2)").arg(targetPath, renameError);
+    m_failureStage = FailureStage::Replace;
+    QFile::remove(tempFilePath);
+    return finish(false);
+  }
+  return finish(true);
 }
 
 void AtomicFileOverwriter::abort() {

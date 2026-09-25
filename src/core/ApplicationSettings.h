@@ -24,6 +24,17 @@ class ApplicationSettings {
 
   void setOpenGlEnabled(bool enabled);
 
+  /**
+   * \brief Pages are shown from a reduced-resolution copy, for speed.
+   *
+   * Display only: processing, batch results, output files and every coordinate
+   * the operator edits (content boxes, split lines, margins, zones) are
+   * unaffected. \see ImageViewBase::setLowResDisplay()
+   */
+  bool isLowResDisplayEnabled() const;
+
+  void setLowResDisplayEnabled(bool enabled);
+
   QString getColorScheme() const;
 
   void setColorScheme(const QString& scheme);
@@ -31,6 +42,32 @@ class ApplicationSettings {
   bool isAutoSaveProjectEnabled() const;
 
   void setAutoSaveProjectEnabled(bool enabled);
+
+  /**
+   * \brief How often, in seconds, the project is saved unattended.
+   *
+   * Applies both to the autosave that overwrites the project file (when that is
+   * enabled) and to the crash-recovery snapshot. Clamped to a sane range on read.
+   *
+   * The write runs on the GUI thread, because it reads the very filter settings
+   * the operator is editing, so each one is a brief pause - noticeable on a slow
+   * machine with the project on a network share. The default is the compromise
+   * between that and how much work an interrupted session may cost.
+   */
+  int getAutoSaveIntervalSec() const;
+
+  void setAutoSaveIntervalSec(int seconds);
+
+  /**
+   * \brief Whether a recovery snapshot is kept alongside the project file.
+   *
+   * The snapshot lets an interrupted session (a crash, a lost remote-desktop
+   * connection, a machine going to sleep) be resumed from the last snapshot
+   * rather than from the last time the operator pressed Save.
+   */
+  bool isCrashRecoveryEnabled() const;
+
+  void setCrashRecoveryEnabled(bool enabled);
 
   int getTiffBwCompression() const;
 
@@ -108,8 +145,11 @@ class ApplicationSettings {
   static inline QString getKey(const QString& keyName);
 
   static const bool DEFAULT_OPENGL_STATE;
+  static const bool DEFAULT_LOW_RES_DISPLAY;
   static const QString DEFAULT_COLOR_SCHEME;
   static const bool DEFAULT_AUTO_SAVE_PROJECT;
+  static const int DEFAULT_AUTO_SAVE_INTERVAL_SEC;
+  static const bool DEFAULT_CRASH_RECOVERY;
   static const int DEFAULT_TIFF_BW_COMPRESSION;
   static const int DEFAULT_TIFF_COLOR_COMPRESSION;
   static const bool DEFAULT_BLACK_ON_WHITE_DETECTION;
@@ -131,7 +171,10 @@ class ApplicationSettings {
 
   static const QString ROOT_KEY;
   static const QString OPENGL_STATE_KEY;
+  static const QString LOW_RES_DISPLAY_KEY;
   static const QString AUTO_SAVE_PROJECT_KEY;
+  static const QString AUTO_SAVE_INTERVAL_SEC_KEY;
+  static const QString CRASH_RECOVERY_KEY;
   static const QString COLOR_SCHEME_KEY;
   static const QString TIFF_BW_COMPRESSION_KEY;
   static const QString TIFF_COLOR_COMPRESSION_KEY;

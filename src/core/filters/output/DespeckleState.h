@@ -27,6 +27,18 @@ class DespeckleState {
  public:
   DespeckleState(const QImage& output, const imageproc::BinaryImage& speckles, double level, const Dpi& dpi);
 
+  /**
+   * \brief Records the despeckling parameters without building the display images.
+   *
+   * For batch processing, where the despeckling UI is never constructed. The
+   * full constructor's m_everythingMixed is an RGB32 copy of the output image -
+   * a 32x inflation of 1-bit output, around 140 MB for a 600 dpi A4 page - and
+   * it exists solely to be handed to DespeckleVisualization. A state built this
+   * way answers level() and nothing else; visualize() and redespeckle() are not
+   * meaningful on it.
+   */
+  DespeckleState(double level, const Dpi& dpi);
+
   double level() const;
 
   DespeckleVisualization visualize() const;

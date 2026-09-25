@@ -6,6 +6,7 @@
 #include <boost/foreach.hpp>
 
 #include "MatrixCalc.h"
+#include <stdexcept>
 
 namespace spfit {
 Optimizer::Optimizer(size_t numVars)

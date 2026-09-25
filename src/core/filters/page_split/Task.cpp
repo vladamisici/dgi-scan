@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "DebugImagesImpl.h"
+#include "Diagnostics.h"
 #include "Dpm.h"
 #include "Filter.h"
 #include "FilterData.h"
@@ -86,6 +87,10 @@ Task::Task(std::shared_ptr<Filter> filter,
 Task::~Task() = default;
 
 FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data) {
+  DIAG_SCOPE(diagScope, "stage.page_split");
+  // Always written, even at the basic level: a stage's own time is its duration
+  // minus the next stage's, so a missing record would be charged to the stage above.
+  diagScope.forceRecord();
   status.throwIfCancelled();
 
   Settings::Record record(m_settings->getPageRecord(m_pageInfo.imageId()));
@@ -188,7 +193,9 @@ Task::UiUpdater::UiUpdater(std::shared_ptr<Filter> filter,
       m_pages(std::move(pages)),
       m_dbg(std::move(dbgImg)),
       m_image(image),
-      m_downscaledImage(ImageView::createDownscaledImage(image)),
+      // Only a page shown to the operator needs a display copy; in batch processing
+      // updateUI() returns before using it, so making one would be wasted work.
+      m_downscaledImage(batchProcessing ? QImage() : ImageView::createDownscaledImage(image)),
       m_pageInfo(pageInfo),
       m_xform(xform),
       m_uiData(uiData),

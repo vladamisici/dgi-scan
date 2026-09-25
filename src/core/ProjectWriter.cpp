@@ -3,12 +3,16 @@
 
 #include "ProjectWriter.h"
 
+#include <QBuffer>
 #include <QFile>
 #include <QFileInfo>
 #include <QTextStream>
 #include <QtXml>
 
 #include "AbstractFilter.h"
+#include "AtomicFileOverwriter.h"
+#include "CrashHandler.h"
+#include "Diagnostics.h"
 #include "FileNameDisambiguator.h"
 #include "ImageId.h"
 #include "ImageMetadata.h"
@@ -64,36 +68,145 @@ ProjectWriter::ProjectWriter(const std::shared_ptr<ProjectPages>& pageSequence,
 
 ProjectWriter::~ProjectWriter() = default;
 
-bool ProjectWriter::write(const QString& filePath, const std::vector<FilterPtr>& filters) const {
+bool ProjectWriter::write(const QString& filePath,
+                          const std::vector<FilterPtr>& filters,
+                          QString* errorMessage) const {
+  DIAG_SCOPE(diagScope, "project.writer.write");
   QDomDocument doc;
-  QDomElement rootEl(doc.createElement("project"));
-  doc.appendChild(rootEl);
-  rootEl.setAttribute("version", PROJECT_VERSION);
-  rootEl.setAttribute("outputDirectory", m_outFileNameGen.outDir());
-  rootEl.setAttribute("layoutDirection", m_layoutDirection == Qt::LeftToRight ? "LTR" : "RTL");
+  {
+    DIAG_SCOPE(buildScope, "project.writer.write.build_dom");
+    QDomElement rootEl(doc.createElement("project"));
+    doc.appendChild(rootEl);
+    rootEl.setAttribute("version", PROJECT_VERSION);
+    rootEl.setAttribute("outputDirectory", m_outFileNameGen.outDir());
+    rootEl.setAttribute("layoutDirection", m_layoutDirection == Qt::LeftToRight ? "LTR" : "RTL");
 
-  rootEl.appendChild(processDirectories(doc));
-  rootEl.appendChild(processFiles(doc));
-  rootEl.appendChild(processImages(doc));
-  rootEl.appendChild(processPages(doc));
-  rootEl.appendChild(m_outFileNameGen.disambiguator()->toXml(doc, "file-name-disambiguation",
-                                                             boost::bind(&ProjectWriter::packFilePath, this, _1)));
+    rootEl.appendChild(processDirectories(doc));
+    rootEl.appendChild(processFiles(doc));
+    rootEl.appendChild(processImages(doc));
+    rootEl.appendChild(processPages(doc));
+    rootEl.appendChild(m_outFileNameGen.disambiguator()->toXml(doc, "file-name-disambiguation",
+                                                               boost::bind(&ProjectWriter::packFilePath, this, _1)));
 
-  QDomElement filtersEl(doc.createElement("filters"));
-  rootEl.appendChild(filtersEl);
-  auto it(filters.begin());
-  const auto end(filters.end());
-  for (; it != end; ++it) {
-    filtersEl.appendChild((*it)->saveSettings(*this, doc));
+    QDomElement filtersEl(doc.createElement("filters"));
+    rootEl.appendChild(filtersEl);
+    auto it(filters.begin());
+    const auto end(filters.end());
+    for (; it != end; ++it) {
+      filtersEl.appendChild((*it)->saveSettings(*this, doc));
+    }
   }
 
-  QFile file(filePath);
-  if (file.open(QIODevice::WriteOnly)) {
-    QTextStream strm(&file);
+  // Serialised into memory first and handed to the file in one write.
+  // QDomDocument::save() ends every line with Qt::endl, which flushes the
+  // stream, so saving straight into the file issued one WriteFile per line of
+  // XML. On a network share each of those is a round trip: a 1.9 MB project -
+  // tens of thousands of lines - took 33 seconds to save over SMB, with the GUI
+  // frozen throughout, on every autosave.
+  //
+  // Note that the QTextStream codec is deliberately left at its default so the
+  // on-disk encoding stays byte-for-byte what previous versions produced.
+  QByteArray data;
+  {
+    DIAG_SCOPE(serializeScope, "project.writer.write.serialize");
+    QBuffer buffer(&data);
+    buffer.open(QIODevice::WriteOnly);
+    QTextStream strm(&buffer);
     doc.save(strm, 2);
-    return true;
+    strm.flush();
   }
-  return false;
+
+  // The size is recorded together with the outcome, on the way out.
+  qint64 bytesWritten = -1;
+  const auto finish = [&diagScope, &bytesWritten](const bool ok) {
+    if (bytesWritten >= 0) {
+      diagScope.attr(core::diag::Attr("bytes", bytesWritten));
+    }
+    diagScope.attr(core::diag::Attr("ok", ok));
+    return ok;
+  };
+
+  // The project is written to a temporary file next to the target and only then
+  // renamed over it. Opening the target directly with QIODevice::WriteOnly - as
+  // this used to do - truncates the existing project the instant the write
+  // begins, so any interruption between that moment and the last byte (a crash,
+  // an out-of-memory kill, a network share dropping out) leaves the operator
+  // with a truncated or empty project and the work of a whole title gone. With a
+  // temp file plus rename, an interrupted save leaves the previous project
+  // untouched: the worst case is losing the current save, not the project.
+  const auto fail = [errorMessage, &finish](const QString& reason) {
+    if (errorMessage) {
+      *errorMessage = reason;
+    }
+    core::CrashHandler::log(QLatin1String("Saving the project failed: ") + reason);
+    return finish(false);
+  };
+
+  // Writing over the target directly. This is what the application always did,
+  // and it carries the risk the atomic write exists to remove - an interruption
+  // leaves a truncated project - so it is only used when the atomic write could
+  // not be completed and the target is known to be untouched.
+  const auto writeInPlace = [&](const QString& why) -> bool {
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+      return fail(QObject::tr("%1; and writing to it directly failed too (%2)").arg(why, file.errorString()));
+    }
+    {
+      DIAG_SCOPE(storeScope, "project.writer.write.store");
+      if (file.write(data) != data.size()) {
+        return fail(QObject::tr("could not write the project data to \"%1\"").arg(filePath));
+      }
+      bytesWritten = file.pos();
+    }
+    if (!file.flush() || (file.error() != QFileDevice::NoError)) {
+      return fail(QObject::tr("could not write \"%1\" (%2)").arg(filePath, file.errorString()));
+    }
+    file.close();
+    core::CrashHandler::log(QLatin1String("Wrote \"") + filePath
+                            + QLatin1String("\" in place, without the usual protection against an interrupted save, "
+                                            "because ")
+                            + why);
+    return finish(true);
+  };
+
+  AtomicFileOverwriter overwriter;
+  QIODevice* const device = overwriter.startWriting(filePath);
+  if (!device) {
+    // The atomic write needs permission to create a file in the project's
+    // folder. A share can withhold exactly that while still allowing an
+    // existing file to be modified, and on such a folder the operator would
+    // otherwise be unable to save at all - a certain loss of their work to
+    // avoid a risked one.
+    return writeInPlace(overwriter.errorString());
+  }
+
+  {
+    DIAG_SCOPE(storeScope, "project.writer.write.store");
+    if (device->write(data) != data.size()) {
+      overwriter.abort();
+      return fail(QObject::tr("could not write the project data to \"%1\"").arg(filePath));
+    }
+    bytesWritten = device->pos();
+  }
+  bool committed = false;
+  {
+    DIAG_SCOPE(commitScope, "project.writer.write.commit");
+    committed = overwriter.commit();
+  }
+  if (!committed) {
+    // Replacing the target needs the right to delete the file being displaced,
+    // which overwriting it in place never needed - a share, or a retention
+    // agent, can grant one and refuse the other. The data was written
+    // successfully, so retrying directly over the target is sound. A failure at
+    // the writing stage is deliberately not retried this way: the data could not
+    // be written once already, and truncating a good project to try again would
+    // risk destroying it.
+    if (overwriter.failureStage() == AtomicFileOverwriter::FailureStage::Replace) {
+      return writeInPlace(overwriter.errorString());
+    }
+    return fail(overwriter.errorString());
+  }
+  return finish(true);
 }  // ProjectWriter::write
 
 QDomElement ProjectWriter::processDirectories(QDomDocument& doc) const {

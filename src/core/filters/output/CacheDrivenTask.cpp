@@ -19,6 +19,7 @@
 #include "Thumbnail.h"
 #include "Utils.h"
 #include "core/AbstractFilterDataCollector.h"
+#include "core/Diagnostics.h"
 #include "core/ThumbnailCollector.h"
 
 namespace output {
@@ -31,6 +32,7 @@ void CacheDrivenTask::process(const PageInfo& pageInfo,
                               AbstractFilterDataCollector* collector,
                               const ImageTransformation& xform,
                               const QPolygonF& contentRectPhys) {
+  DIAG_COUNT("cache_task.output");
   if (auto* thumbCol = dynamic_cast<ThumbnailCollector*>(collector)) {
     const QFileInfo sourceFileInfo(pageInfo.id().imageId().filePath());
     const QString outFilePath(m_outFileNameGen.filePathFor(pageInfo.id()));

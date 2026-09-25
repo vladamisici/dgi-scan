@@ -9,6 +9,7 @@
 #include "BinaryImage.h"
 #include "BitOps.h"
 #include "InfluenceMap.h"
+#include <stdexcept>
 
 namespace imageproc {
 const uint32_t ConnectivityMap::BACKGROUND = ~uint32_t(0);

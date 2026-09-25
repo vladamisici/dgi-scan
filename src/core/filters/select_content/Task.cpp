@@ -10,6 +10,7 @@
 
 #include "ContentBoxFinder.h"
 #include "DebugImagesImpl.h"
+#include "Diagnostics.h"
 #include "Dpm.h"
 #include "Filter.h"
 #include "FilterData.h"
@@ -70,6 +71,10 @@ Task::Task(std::shared_ptr<Filter> filter,
 Task::~Task() = default;
 
 FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data) {
+  DIAG_SCOPE(diagScope, "stage.select_content");
+  // Always written, even at the basic level: a stage's own time is its duration
+  // minus the next stage's, so a missing record would be charged to the stage above.
+  diagScope.forceRecord();
   status.throwIfCancelled();
 
   std::unique_ptr<Params> params(m_settings->getPageParams(m_pageId));
@@ -165,7 +170,9 @@ Task::UiUpdater::UiUpdater(std::shared_ptr<Filter> filter,
       m_pageId(pageId),
       m_dbg(std::move(dbg)),
       m_image(image),
-      m_downscaledImage(ImageView::createDownscaledImage(image)),
+      // Only a page shown to the operator needs a display copy; in batch processing
+      // updateUI() returns before using it, so making one would be wasted work.
+      m_downscaledImage(batch ? QImage() : ImageView::createDownscaledImage(image)),
       m_contentMask(contentMask),
       m_xform(xform),
       m_uiData(uiData),

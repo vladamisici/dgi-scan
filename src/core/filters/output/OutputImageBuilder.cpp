@@ -7,6 +7,7 @@
 
 #include "ForegroundType.h"
 #include "OutputImageWithOriginalBackgroundMask.h"
+#include <stdexcept>
 
 using namespace imageproc;
 
