@@ -6,7 +6,7 @@
 #include <QDebug>
 #include <QFile>
 #include <QObject>
-#include <QTemporaryFile>
+#include <QRandomGenerator>
 
 #include "Diagnostics.h"
 #include "Utils.h"
@@ -72,6 +72,26 @@ SyncResult syncToDisk(QFile& file) {
   return SyncResult::Failed;
 #endif
 }
+
+/**
+ * \brief The target's path with a random suffix, in the same directory.
+ *
+ * Built here rather than left to QTemporaryFile, which mishandles UNC paths on
+ * Windows: given "\\server\share\..." it cannot create the file at all, and
+ * given "//server/share/..." it creates it but reports its name as
+ * "UNC/server/share/...", so the rename and the clean-up both fail with "path
+ * not found" and the temporary file is left behind on the share. On such
+ * shares no save ever took the atomic route. Composing the name ourselves keeps
+ * it exactly as the caller spelled the target, whichever separators that uses.
+ */
+QString tempPathFor(const QString& targetPath) {
+  static const char alphabet[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  QString suffix(QLatin1Char('.'));
+  for (int i = 0; i < 6; ++i) {
+    suffix += QLatin1Char(alphabet[QRandomGenerator::global()->bounded(int(sizeof(alphabet) - 1))]);
+  }
+  return targetPath + suffix;
+}
 }  // namespace
 
 AtomicFileOverwriter::AtomicFileOverwriter() = default;
@@ -85,20 +105,30 @@ QIODevice* AtomicFileOverwriter::startWriting(const QString& filePath) {
   m_errorString.clear();
   m_failureStage = FailureStage::None;
 
-  m_tempFile = std::make_unique<QTemporaryFile>(filePath);
-  m_tempFile->setAutoRemove(false);
-  if (!m_tempFile->open()) {
-    // Worth spelling out, because this is the step that can fail where simply
-    // overwriting the existing file would have worked: writing here needs
-    // permission to create a NEW file in the directory, which a share can
-    // withhold while still allowing an existing file to be modified.
-    m_errorString = QObject::tr("could not create a temporary file next to \"%1\" (%2); "
-                                "saving this way needs permission to create files in that folder")
-                        .arg(filePath, m_tempFile->errorString());
-    m_failureStage = FailureStage::Create;
-    m_tempFile.reset();
+  // NewOnly never opens a file that is already there, so a name collision -
+  // vanishingly unlikely, but a stale leftover could cause one - just means
+  // drawing another name, never writing into someone else's file.
+  static const int maxAttempts = 8;
+  for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+    m_tempFile = std::make_unique<QFile>(tempPathFor(filePath));
+    if (m_tempFile->open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+      m_targetPath = filePath;
+      return m_tempFile.get();
+    }
+    if (!m_tempFile->exists()) {
+      break;
+    }
   }
-  return m_tempFile.get();
+  // Worth spelling out, because this is the step that can fail where simply
+  // overwriting the existing file would have worked: writing here needs to
+  // create a NEW file in the directory, which a share can refuse while still
+  // allowing an existing file to be modified.
+  m_errorString = QObject::tr("could not create a temporary file next to \"%1\" (%2); "
+                              "saving this way needs to create a new file in that folder")
+                      .arg(filePath, m_tempFile->errorString());
+  m_failureStage = FailureStage::Create;
+  m_tempFile.reset();
+  return nullptr;
 }
 
 bool AtomicFileOverwriter::commit(const Durability durability) {
@@ -118,7 +148,7 @@ bool AtomicFileOverwriter::commit(const Durability durability) {
   m_failureStage = FailureStage::None;
 
   const QString tempFilePath(m_tempFile->fileName());
-  const QString targetPath(m_tempFile->fileTemplate());
+  const QString targetPath(m_targetPath);
 
   // A write error that only surfaces at flush time - a full disk, a quota, a
   // share that went away mid-write - must not be promoted into a rename over
@@ -156,9 +186,8 @@ bool AtomicFileOverwriter::commit(const Durability durability) {
     }
   }
 
-  // Yes, we have to destroy this object here, because:
-  // 1. Under Windows, open files can't be renamed or deleted.
-  // 2. QTemporaryFile::close() doesn't really close it.
+  // Closed before the rename: under Windows, open files can't be renamed or
+  // deleted.
   m_tempFile.reset();
 
   if (!written) {

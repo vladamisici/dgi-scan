@@ -9,8 +9,8 @@
 
 #include "NonCopyable.h"
 
+class QFile;
 class QIODevice;
-class QTemporaryFile;
 
 /**
  * \brief Overwrites files by writing to a temporary file and then replacing
@@ -110,7 +110,8 @@ class AtomicFileOverwriter {
   FailureStage failureStage() const { return m_failureStage; }
 
  private:
-  std::unique_ptr<QTemporaryFile> m_tempFile;
+  std::unique_ptr<QFile> m_tempFile;
+  QString m_targetPath;
   QString m_errorString;
   FailureStage m_failureStage = FailureStage::None;
 };
