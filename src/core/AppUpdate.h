@@ -68,12 +68,14 @@ class AppUpdate {
    * \brief The newest installer at \p location.
    *
    * \p location is an installer itself, or a folder, in which every
-   * scantailor-dgi-*-win64.exe counts. Files without a version are passed over.
-   * Touches the network: not for the GUI thread.
+   * scantailor-dgi-*-win64.exe counts. Files without a version are passed over,
+   * and so are files changed less than \p settleSeconds ago: one being copied
+   * there has its version long before it has the rest, and installing a part
+   * of it would fail. Touches the network: not for the GUI thread.
    *
    * \return The installer, or a null one if there is none.
    */
-  static Installer newestInstaller(const QString& location);
+  static Installer newestInstaller(const QString& location, int settleSeconds = 120);
 };
 }  // namespace core
 

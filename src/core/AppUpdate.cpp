@@ -5,6 +5,7 @@
 
 #include <config.h>
 
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QRegularExpression>
@@ -70,28 +71,33 @@ ReleaseVersion AppUpdate::productVersion(const QString& path) {
   return version;
 }
 
-AppUpdate::Installer AppUpdate::newestInstaller(const QString& location) {
+AppUpdate::Installer AppUpdate::newestInstaller(const QString& location, const int settleSeconds) {
   DIAG_SCOPE(diagScope, "update.find");
-  QStringList candidates;
+  QFileInfoList candidates;
   const QFileInfo info(location);
   if (info.isFile()) {
-    candidates << info.absoluteFilePath();
+    candidates << info;
   } else if (info.isDir()) {
-    for (const QFileInfo& file : QDir(location).entryInfoList({QStringLiteral("scantailor-dgi-*-win64.exe")},
-                                                             QDir::Files | QDir::Readable)) {
-      candidates << file.absoluteFilePath();
-    }
+    candidates = QDir(location).entryInfoList({QStringLiteral("scantailor-dgi-*-win64.exe")},
+                                              QDir::Files | QDir::Readable);
   }
 
+  const QDateTime settled = QDateTime::currentDateTimeUtc().addSecs(-settleSeconds);
   Installer newest;
-  for (const QString& candidate : candidates) {
-    const ReleaseVersion version(productVersion(candidate));
+  int unsettled = 0;
+  for (const QFileInfo& candidate : candidates) {
+    if (candidate.lastModified().toUTC() > settled) {
+      ++unsettled;
+      continue;
+    }
+    const ReleaseVersion version(productVersion(candidate.absoluteFilePath()));
     if (!version.isNull() && (newest.isNull() || (newest.version < version))) {
-      newest.path = candidate;
+      newest.path = candidate.absoluteFilePath();
       newest.version = version;
     }
   }
   diagScope.attr(diag::Attr("candidates", static_cast<int>(candidates.size())));
+  diagScope.attr(diag::Attr("unsettled", unsettled));
   diagScope.attr(diag::Attr("found", !newest.isNull()));
   return newest;
 }

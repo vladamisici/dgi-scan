@@ -39,7 +39,8 @@ are run.
 An installed copy looks for a newer installer in `\\server1\kit\PoD_and_XML`
 shortly after it starts and then every hour. Every `scantailor-dgi-*-win64.exe`
 there counts, by the release in its file properties (`1.0.16-dgi.12`), since
-the file name stays the same from one release to the next. When one is newer,
+the file name stays the same from one release to the next, once it has been
+unchanged for two minutes: one still being copied there is left alone. When one is newer,
 the operator is told, in Romanian, "Versiune noua disponibila". With no project
 open, the application closes, installs it and starts again, after a 20 second
 countdown that can be stopped; with a project open, a link in the status bar

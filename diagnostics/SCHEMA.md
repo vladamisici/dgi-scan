@@ -210,7 +210,7 @@ Worker and helper threads:
 | `file.rename` (`attempts`, `slept_ms`, `error`, `ok`) | any | rename with retries |
 | `retouch.rewrite` (`format`, `edits`, `ok`) | retouch | writing retouched pixels into an image file |
 | `retouch.backup.keep` (`copied`), `retouch.backup.restore` | retouch | keeping, and putting back, the original of a retouched file |
-| `update.find` (`candidates`, `found`) | update | looking for a newer installer where the office keeps them |
+| `update.find` (`candidates`, `unsettled`: changed too recently to count, `found`) | update | looking for a newer installer where the office keeps them |
 
 Notes:
 

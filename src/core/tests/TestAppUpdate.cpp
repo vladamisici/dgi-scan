@@ -3,6 +3,7 @@
 
 #include <AppUpdate.h>
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -87,16 +88,39 @@ BOOST_AUTO_TEST_CASE(newest_installer_is_found_by_version) {
   }
   BOOST_REQUIRE(QFile::copy(systemFile("kernel32.dll"), dir.filePath(QStringLiteral("something-else.exe"))));
 
-  const AppUpdate::Installer inFolder(AppUpdate::newestInstaller(dir.path()));
+  const AppUpdate::Installer inFolder(AppUpdate::newestInstaller(dir.path(), 0));
   BOOST_REQUIRE(!inFolder.isNull());
   BOOST_CHECK_EQUAL(QFileInfo(inFolder.path).fileName().toStdString(), "scantailor-dgi-1.0.16-win64.exe");
   BOOST_CHECK(inFolder.version == AppUpdate::productVersion(systemFile("kernel32.dll")));
 
   // The installer itself, as the location.
-  const AppUpdate::Installer named(AppUpdate::newestInstaller(versioned));
+  const AppUpdate::Installer named(AppUpdate::newestInstaller(versioned, 0));
   BOOST_CHECK_EQUAL(named.path.toStdString(), QFileInfo(versioned).absoluteFilePath().toStdString());
-  BOOST_CHECK(AppUpdate::newestInstaller(unversioned).isNull());
-  BOOST_CHECK(AppUpdate::newestInstaller(dir.filePath(QStringLiteral("nowhere"))).isNull());
+  BOOST_CHECK(AppUpdate::newestInstaller(unversioned, 0).isNull());
+  BOOST_CHECK(AppUpdate::newestInstaller(dir.filePath(QStringLiteral("nowhere")), 0).isNull());
+}
+
+// An installer still being copied to the share has its version long before
+// the rest of it: it waits until it has not changed for a while.
+BOOST_AUTO_TEST_CASE(installer_being_copied_is_left_alone) {
+  QTemporaryDir dir;
+  BOOST_REQUIRE(dir.isValid());
+  const QString installer = dir.filePath(QStringLiteral("scantailor-dgi-1.0.16-win64.exe"));
+  BOOST_REQUIRE(QFile::copy(systemFile("kernel32.dll"), installer));
+  {
+    QFile file(installer);
+    BOOST_REQUIRE(file.open(QIODevice::ReadWrite));
+    BOOST_REQUIRE(file.setFileTime(QDateTime::currentDateTime(), QFileDevice::FileModificationTime));
+  }
+  BOOST_CHECK(AppUpdate::newestInstaller(dir.path()).isNull());
+  BOOST_CHECK(AppUpdate::newestInstaller(installer).isNull());
+
+  {
+    QFile file(installer);
+    BOOST_REQUIRE(file.open(QIODevice::ReadWrite));
+    BOOST_REQUIRE(file.setFileTime(QDateTime::currentDateTime().addSecs(-300), QFileDevice::FileModificationTime));
+  }
+  BOOST_CHECK(!AppUpdate::newestInstaller(dir.path()).isNull());
 }
 #endif
 
