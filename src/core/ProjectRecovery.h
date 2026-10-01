@@ -55,6 +55,16 @@ class ProjectRecovery {
    */
   static bool isSnapshotNewerThanProject(const QString& projectFilePath);
 
+  /**
+   * \brief Whether the snapshot is of the project it sits beside.
+   *
+   * It is not when the two list none of the same images: a folder copied from
+   * another title with its leftovers, say. Offered as recovery, it would load
+   * that other title under this one's name. A snapshot or project whose images
+   * cannot be read is given the benefit of the doubt.
+   */
+  static bool snapshotMatchesProject(const QString& projectFilePath);
+
   /** \brief Removes the snapshot. Succeeds if there was nothing to remove. */
   static bool discardSnapshot(const QString& projectFilePath);
 

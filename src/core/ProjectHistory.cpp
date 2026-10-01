@@ -4,6 +4,7 @@
 #include "ProjectHistory.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QFileInfo>
 #include <QLocale>
 #include <QSettings>
@@ -202,5 +203,18 @@ void ProjectHistory::clear() {
 
 QString ProjectHistory::mostRecent() const {
   return m_entries.empty() ? QString() : m_entries.front().filePath;
+}
+
+QString ProjectHistory::shortLocation(const QString& projectFilePath) {
+  if (projectFilePath.isEmpty()) {
+    return QString();
+  }
+  const QString folder = QDir::fromNativeSeparators(QFileInfo(projectFilePath).absolutePath());
+  const QStringList parts = folder.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+  // The drive, or the server and share, and three folders: nothing to leave out.
+  if (parts.size() <= 4) {
+    return QDir::toNativeSeparators(folder);
+  }
+  return QDir::toNativeSeparators(parts.mid(parts.size() - 3).join(QLatin1Char('/')));
 }
 }  // namespace core

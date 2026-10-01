@@ -8,12 +8,39 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QLockFile>
+#include <QSet>
 #include <QStandardPaths>
+#include <QXmlStreamReader>
 
 namespace core {
 namespace {
 const QLatin1String SNAPSHOT_SUFFIX(".autosave");
+
+/** \brief The names of the image files a project file lists, case-folded; empty if it cannot be read. */
+QSet<QString> imageFileNames(const QString& projectFilePath) {
+  QSet<QString> names;
+  QFile file(projectFilePath);
+  if (!file.open(QIODevice::ReadOnly)) {
+    return names;
+  }
+  QXmlStreamReader xml(&file);
+  bool inFiles = false;
+  while (!xml.atEnd() && !xml.hasError()) {
+    xml.readNext();
+    if (xml.isStartElement()) {
+      if (xml.name() == QLatin1String("files")) {
+        inFiles = true;
+      } else if (inFiles && (xml.name() == QLatin1String("file"))) {
+        names.insert(xml.attributes().value(QLatin1String("name")).toString().toCaseFolded());
+      }
+    } else if (xml.isEndElement() && (xml.name() == QLatin1String("files"))) {
+      // The images are listed before the much longer filter settings.
+      break;
+    }
+  }
+  return names;
 }
+}  // namespace
 
 QString ProjectRecovery::snapshotPathFor(const QString& projectFilePath) {
   if (projectFilePath.isEmpty()) {
@@ -52,6 +79,18 @@ bool ProjectRecovery::isSnapshotNewerThanProject(const QString& projectFilePath)
     return true;
   }
   return snapshotTimestamp(projectFilePath) > projectInfo.lastModified();
+}
+
+bool ProjectRecovery::snapshotMatchesProject(const QString& projectFilePath) {
+  if (!QFileInfo::exists(projectFilePath)) {
+    return true;
+  }
+  const QSet<QString> projectNames = imageFileNames(projectFilePath);
+  const QSet<QString> snapshotNames = imageFileNames(snapshotPathFor(projectFilePath));
+  if (projectNames.isEmpty() || snapshotNames.isEmpty()) {
+    return true;
+  }
+  return projectNames.intersects(snapshotNames);
 }
 
 QString ProjectRecovery::localSnapshotPathFor(const QString& projectFilePath) {

@@ -18,6 +18,7 @@ set(common_sources
     CrashHandler.cpp CrashHandler.h
     Diagnostics.cpp Diagnostics.h
     ProjectRecovery.cpp ProjectRecovery.h
+    AppUpdate.cpp AppUpdate.h
     ProjectHistory.cpp ProjectHistory.h
     PageSelectionAccessor.cpp PageSelectionAccessor.h
     PageSelectionProvider.h
@@ -131,8 +132,9 @@ if (WIN32)
   # dbghelp provides MiniDumpWriteDump, used by CrashHandler so that a crash
   # leaves a usable report behind instead of the application simply vanishing,
   # and the symbol lookup behind the stall stacks in Diagnostics. psapi provides
-  # the process memory counters Diagnostics samples.
-  target_link_libraries(core PRIVATE dbghelp psapi)
+  # the process memory counters Diagnostics samples. version reads the product
+  # version of an installer, which is how AppUpdate tells a newer one.
+  target_link_libraries(core PRIVATE dbghelp psapi version)
 endif()
 target_include_directories(core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 set_target_properties(core PROPERTIES AUTOUIC ON)

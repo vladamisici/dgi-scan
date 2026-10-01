@@ -1,5 +1,6 @@
 set(sources
     main.cpp
+    TestAppUpdate.cpp
     TestAtomicFileOverwriter.cpp
     TestContentSpanFinder.cpp
     TestDiagnostics.cpp

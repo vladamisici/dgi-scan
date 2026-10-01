@@ -41,5 +41,27 @@ BOOST_AUTO_TEST_CASE(normal_mode_clears_verification_inputs) {
   BOOST_CHECK(history.entries().front().inputDirectories.isEmpty());
 }
 
+#ifdef Q_OS_WIN
+// Every title's project is "project": the folder is what tells them apart.
+BOOST_AUTO_TEST_CASE(short_location_names_the_title_folder) {
+  using core::ProjectHistory;
+  BOOST_CHECK_EQUAL(
+      ProjectHistory::shortLocation(QLatin1String("D:/00scanari/2161/00_clean/01_romane/project.ScanTailor"))
+          .toStdString(),
+      "2161\\00_clean\\01_romane");
+  BOOST_CHECK_EQUAL(
+      ProjectHistory::shortLocation(QLatin1String("D:\\00scanari\\nou\\00_clean\\01_romane\\project.ScanTailor"))
+          .toStdString(),
+      "nou\\00_clean\\01_romane");
+  // Nothing worth leaving out.
+  BOOST_CHECK_EQUAL(ProjectHistory::shortLocation(QLatin1String("D:/scans/book/project.ScanTailor")).toStdString(),
+                    "D:\\scans\\book");
+  BOOST_CHECK_EQUAL(
+      ProjectHistory::shortLocation(QLatin1String("//server1/kit/1302/project.ScanTailor")).toStdString(),
+      "\\\\server1\\kit\\1302");
+  BOOST_CHECK(ProjectHistory::shortLocation(QString()).isEmpty());
+}
+#endif
+
 BOOST_AUTO_TEST_SUITE_END()
 }  // namespace Tests

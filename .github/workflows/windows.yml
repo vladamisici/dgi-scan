@@ -18,7 +18,12 @@ jobs:
       BUILD_TYPE: Release
 
     steps:
+      # The whole history, tags included: the build takes its DGI release
+      # number from the nearest vX.Y.Z-dgi.N tag (CMakeLists.txt), which a
+      # shallow checkout would not have.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -128,6 +133,14 @@ jobs:
         shell: pwsh
         run: |
           $exe = Get-ChildItem build-installer/scantailor-dgi-*-win64.exe | Select-Object -First 1
+          # The release in the installer's properties is how an installed copy
+          # tells a newer installer on the share: the file name never changes.
+          $info = (Get-Item $exe.FullName).VersionInfo
+          $raw = "$($info.ProductMajorPart).$($info.ProductMinorPart).$($info.ProductBuildPart).$($info.ProductPrivatePart)"
+          Write-Host "installer release: $($info.ProductVersion) ($raw)"
+          if ($info.ProductVersion -notmatch '^\d+\.\d+\.\d+-dgi\.\d+$' -or $raw -eq '0.0.0.0') {
+            throw "installer carries no release version"
+          }
           Start-Process -FilePath $exe.FullName -ArgumentList "/S" -Wait
           $installed = "$env:ProgramFiles\Scantailor-DGI\scantailor.exe"
           if (-not (Test-Path $installed)) { throw "installer did not place $installed" }

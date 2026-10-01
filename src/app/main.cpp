@@ -213,12 +213,16 @@ int main(int argc, char* argv[]) {
     // The operator double-clicked a title and is now waiting for it: this is not
     // start-up any more, whatever the event loop's state.
     core::diag::setPhase("run");
+    core::CrashHandler::log(QStringLiteral("Open: named on the command line: ") + args.at(1));
     mainWnd->openProject(args.at(1));
   } else {
     // Only when no project was named on the command line. openProject() is not
     // synchronous - it can put up the Fix DPI dialog and finish later - so
     // testing "is a project loaded yet" here would not be a reliable guard.
     mainWnd->offerUnsavedSessionRecovery();
+  }
+  if (!stress) {
+    mainWnd->startUpdateChecks();
   }
 
   const int result = Application::exec();

@@ -82,6 +82,15 @@ class ProjectHistory {
   /** \brief Path of the most recently opened project, or an empty string. */
   QString mostRecent() const;
 
+  /**
+   * \brief The folder of a project, short enough for a title bar: its last three folders.
+   *
+   * Every title's project tends to be called "project", so the name alone does
+   * not tell one title from another, and the folder does: 2161\00_clean\01_romane.
+   * A folder no deeper than that is given whole.
+   */
+  static QString shortLocation(const QString& projectFilePath);
+
  private:
   std::vector<Entry> m_entries;
 };

@@ -66,6 +66,7 @@ class QRectF;
 class QLayout;
 class RetouchPanel;
 class VerificationView;
+class AppUpdater;
 
 class MainWindow : public QMainWindow, private FilterUiInterface, private RetouchHost, private Ui::MainWindow {
   DECLARE_NON_COPYABLE(MainWindow)
@@ -127,6 +128,9 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Retouc
    * with a project named on the command line.
    */
   void offerUnsavedSessionRecovery();
+
+  /** \brief Starts looking for a newer installer, if this copy updates itself. \see AppUpdater */
+  void startUpdateChecks();
 
  private:
   enum MainAreaAction { UPDATE_MAIN_AREA, CLEAR_MAIN_AREA };
@@ -213,6 +217,9 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Retouc
   void newProjectCreated(ProjectCreationContext* context);
 
   void openProject();
+
+  /** \brief Opens a project picked from the start page's recent list. */
+  void openRecentProject(const QString& projectFile);
 
   void startVerification();
 
@@ -424,6 +431,17 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Retouc
 
   ImageId verificationOriginalFor(const ImageId& projectImage) const;
 
+  /**
+   * \brief Makes sure the verification input folders hold this project's pages.
+   *
+   * Folders holding none of them are most likely another title's - or the
+   * project is not the one meant - and the comparison would be empty. The
+   * operator is shown both and can choose the folders again.
+   *
+   * \return false if the operator would rather not open the project.
+   */
+  bool confirmVerificationInputs(const ProjectPages& pages, const QString& projectFile);
+
   QSizeF m_maxLogicalThumbSize;
   std::shared_ptr<ProjectPages> m_pages;
   std::shared_ptr<StageSequence> m_stages;
@@ -484,6 +502,10 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Retouc
   std::unique_ptr<RetouchController> m_retouch;
   /** Set while the retouch editor is put on screen on its own, which verification mode must not wrap. */
   bool m_showingRetouchEditor = false;
+  /** Null unless this copy updates itself. \see startUpdateChecks() */
+  AppUpdater* m_updater = nullptr;
+  /** Set while closing the application waits on the project being closed. \see timerEvent() */
+  bool m_closingProject = false;
 };
 
 

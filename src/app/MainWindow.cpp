@@ -37,6 +37,8 @@
 #include <memory>
 
 #include "AbstractRelinker.h"
+#include "AppUpdate.h"
+#include "AppUpdater.h"
 #include "Application.h"
 #include "AutoRemovingFile.h"
 #include "BasicImageView.h"
@@ -520,7 +522,7 @@ void MainWindow::showNewOpenProjectPanel() {
   connect(nop, SIGNAL(newProject()), this, SLOT(newProject()), Qt::QueuedConnection);
   connect(nop, SIGNAL(openProject()), this, SLOT(openProject()), Qt::QueuedConnection);
   connect(nop, SIGNAL(verificationProject()), this, SLOT(startVerification()), Qt::QueuedConnection);
-  connect(nop, SIGNAL(openRecentProject(const QString&)), this, SLOT(openProject(const QString&)),
+  connect(nop, SIGNAL(openRecentProject(const QString&)), this, SLOT(openRecentProject(const QString&)),
           Qt::QueuedConnection);
   connect(nop, SIGNAL(openRecentVerificationProject(const QString&, const QStringList&)), this,
           SLOT(openRecentVerificationProject(const QString&, const QStringList&)), Qt::QueuedConnection);
@@ -628,7 +630,10 @@ void MainWindow::timerEvent(QTimerEvent* const event) {
 
   m_closeRequested = false;
 
-  if (closeProjectInteractive()) {
+  m_closingProject = true;
+  const bool projectClosed = closeProjectInteractive();
+  m_closingProject = false;
+  if (projectClosed) {
     m_closing = true;
     diag::setPhase("shutdown");
     QSettings settings;
@@ -636,7 +641,12 @@ void MainWindow::timerEvent(QTimerEvent* const event) {
     if (!isMaximized()) {
       settings.setValue("mainWindow/nonMaximizedGeometry", saveGeometry());
     }
+    if (m_updater) {
+      m_updater->applicationClosing();
+    }
     close();
+  } else if (m_updater) {
+    m_updater->closeCancelled();
   }
 }
 
@@ -701,21 +711,39 @@ void MainWindow::offerUnsavedSessionRecovery() {
   }
 }
 
+void MainWindow::startUpdateChecks() {
+  if (m_updater || !AppUpdater::isEnabled()) {
+    return;
+  }
+  m_updater = new AppUpdater(this, [this]() {
+    return isProjectLoaded() || isBatchProcessingInProgress() || m_closingProject || m_closing;
+  });
+  m_updater->start();
+}
+
 MainWindow::RecoveryPromptResult MainWindow::promptProjectRecovery(const QString& projectFile) {
   const QDateTime snapshotTime = ProjectRecovery::snapshotTimestamp(projectFile);
   const QString when = snapshotTime.isValid()
                            ? QLocale().toString(snapshotTime, QLocale::ShortFormat)
                            : tr("an unknown time");
 
-  QMessageBox msgBox(QMessageBox::Warning, tr("Recover Project"),
-                     tr("ScanTailor did not shut down cleanly the last time this project was open.\n\n"
-                        "Changes made up to %1 were saved automatically and can be restored.")
-                         .arg(when),
-                     QMessageBox::NoButton, this);
+  // Every title's project tends to have the same name, so the prompt says which one it is about.
+  QString text = tr("ScanTailor did not shut down cleanly the last time this project was open.\n\n"
+                    "Changes made up to %1 were saved automatically and can be restored.\n\n"
+                    "Project: %2")
+                     .arg(when, QDir::toNativeSeparators(projectFile));
+  const bool sameProject = ProjectRecovery::snapshotMatchesProject(projectFile);
+  if (!sameProject) {
+    CrashHandler::log(QStringLiteral("Recovery: the snapshot beside %1 lists none of its images").arg(projectFile));
+    text += tr("\n\nCareful: the saved changes list none of this project's images. They are most likely another "
+               "project's, copied here with its folder.");
+  }
+
+  QMessageBox msgBox(QMessageBox::Warning, tr("Recover Project"), text, QMessageBox::NoButton, this);
   QPushButton* const recoverBtn = msgBox.addButton(tr("Recover"), QMessageBox::AcceptRole);
   QPushButton* const discardBtn = msgBox.addButton(tr("Discard"), QMessageBox::DestructiveRole);
-  msgBox.addButton(QMessageBox::Cancel);
-  msgBox.setDefaultButton(recoverBtn);
+  QPushButton* const cancelBtn = msgBox.addButton(QMessageBox::Cancel);
+  msgBox.setDefaultButton(sameProject ? recoverBtn : cancelBtn);
   msgBox.exec();
 
   if (msgBox.clickedButton() == recoverBtn) {
@@ -1820,6 +1848,15 @@ void MainWindow::openProject() {
     return;
   }
 
+  // Where each open comes from is logged: with every title's project named the
+  // same, "it opened the wrong one" otherwise cannot be told from a wrong pick.
+  CrashHandler::log(QStringLiteral("Open: picked in the Open Project dialog, which started in %1: %2")
+                        .arg(projectDir, projectFile));
+  openProject(projectFile);
+}
+
+void MainWindow::openRecentProject(const QString& projectFile) {
+  CrashHandler::log(QStringLiteral("Open: picked from the recent projects: ") + projectFile);
   openProject(projectFile);
 }
 
@@ -1848,6 +1885,8 @@ void MainWindow::startVerification() {
     return;
   }
 
+  CrashHandler::log(QStringLiteral("Open: picked for verification in the dialog, which started in %1: %2; inputs: %3")
+                        .arg(projectDir, projectFile, inputDirectories.join(QStringLiteral("; "))));
   m_verificationMode = true;
   m_verificationInputDirectories = inputDirectories;
   m_verificationFilesByName.clear();
@@ -1874,6 +1913,8 @@ void MainWindow::openRecentVerificationProject(const QString& projectFile,
     return;
   }
 
+  CrashHandler::log(QStringLiteral("Open: picked for verification from the recent projects: %1; inputs: %2")
+                        .arg(projectFile, selectedDirectories.join(QStringLiteral("; "))));
   m_verificationMode = true;
   m_verificationInputDirectories = selectedDirectories;
   m_verificationFilesByName.clear();
@@ -1963,6 +2004,17 @@ void MainWindow::loadProjectDocument(const QString& projectFile, const QString& 
 }
 
 void MainWindow::projectOpened(ProjectOpeningContext* context) {
+  // Before the history: the folders it remembers are the ones settled on here.
+  if (m_verificationMode) {
+    rebuildVerificationFileIndex();
+    if (!confirmVerificationInputs(*context->projectReader()->pages(), context->projectFile())) {
+      m_verificationMode = false;
+      m_verificationInputDirectories.clear();
+      m_verificationFilesByName.clear();
+      return;
+    }
+  }
+
   DIAG_SCOPE(openedScope, "project.opened");
   // An empty project file is a recovered session that has never been saved: it
   // has no location worth remembering and nothing to put in the history.
@@ -1975,10 +2027,6 @@ void MainWindow::projectOpened(ProjectOpeningContext* context) {
     history.write();
 
     QSettings().setValue("project/lastDir", QFileInfo(context->projectFile()).absolutePath());
-  }
-
-  if (m_verificationMode) {
-    rebuildVerificationFileIndex();
   }
 
   switchToNewProject(context->projectReader()->pages(), context->projectReader()->outputDirectory(),
@@ -2122,6 +2170,51 @@ ImageId MainWindow::verificationOriginalFor(const ImageId& projectImage) const {
   return bestScoreIsAmbiguous ? ImageId() : ImageId(bestCandidate, projectImage.page());
 }
 
+bool MainWindow::confirmVerificationInputs(const ProjectPages& pages, const QString& projectFile) {
+  const PageSequence sequence(pages.toPageSequence(IMAGE_VIEW));
+  if (sequence.numPages() == 0) {
+    return true;
+  }
+  while (true) {
+    for (const PageInfo& page : sequence) {
+      if (m_verificationFilesByName.contains(QFileInfo(page.imageId().filePath()).fileName().toCaseFolded())) {
+        return true;
+      }
+    }
+
+    QStringList folders;
+    for (const QString& directory : m_verificationInputDirectories) {
+      folders << QDir::toNativeSeparators(directory);
+    }
+    CrashHandler::log(QStringLiteral("Verification: none of the %1 pages of %2 has an input image in %3")
+                          .arg(sequence.numPages())
+                          .arg(projectFile, folders.join(QStringLiteral("; "))));
+
+    QMessageBox box(QMessageBox::Warning, tr("Verification"),
+                    tr("None of this project's pages has an input image in the chosen folders, so there would be "
+                       "nothing to compare them with.\n\nProject:\n%1\n\nInput folders:\n%2")
+                        .arg(QDir::toNativeSeparators(projectFile), folders.join(QLatin1Char('\n'))),
+                    QMessageBox::NoButton, this);
+    QPushButton* const chooseBtn = box.addButton(tr("Choose Folders..."), QMessageBox::AcceptRole);
+    QPushButton* const openBtn = box.addButton(tr("Open Anyway"), QMessageBox::DestructiveRole);
+    box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(chooseBtn);
+    box.exec();
+
+    if (box.clickedButton() == openBtn) {
+      return true;
+    }
+    if (box.clickedButton() != chooseBtn) {
+      return false;
+    }
+    const QStringList chosen = selectVerificationInputDirectories(m_verificationInputDirectories);
+    if (!chosen.isEmpty()) {
+      m_verificationInputDirectories = chosen;
+      rebuildVerificationFileIndex();
+    }
+  }
+}
+
 void MainWindow::closeProject() {
   closeProjectInteractive();
 }
@@ -2191,7 +2284,9 @@ void MainWindow::showAboutDialog() {
   Ui::AboutDialog ui;
   auto* dialog = new QDialog(this);
   ui.setupUi(dialog);
-  ui.version->setText(QString(tr("version ")) + QString::fromUtf8(VERSION));
+  // The release, which is what an update is told by: the version stays the same between them.
+  const ReleaseVersion release = AppUpdate::current();
+  ui.version->setText(QString(tr("version ")) + (release.build > 0 ? release.toString() : QString::fromUtf8(VERSION)));
 
   QResource license(":/GPLv3.html");
   ui.licenseViewer->setHtml(QString::fromUtf8((const char*) license.data(), static_cast<int>(license.size())));
@@ -2307,6 +2402,9 @@ void MainWindow::updateMainArea() {
     setDockWidgetsVisible(false);
     showNewOpenProjectPanel();
     m_statusBarPanel->clear();
+    if (m_updater) {
+      m_updater->becameIdle();
+    }
   } else if (isBatchProcessingInProgress()) {
     filterList->setBatchProcessingPossible(false);
     setImageWidget(m_batchProcessingWidget.get(), KEEP_OWNERSHIP);
@@ -2385,7 +2483,9 @@ void MainWindow::updateWindowTitle() {
   if (m_projectFile.isEmpty()) {
     projectName = tr("Unnamed");
   } else {
-    projectName = QFileInfo(m_projectFile).completeBaseName();
+    // With its folder: every title's project tends to have the same name.
+    projectName = ProjectHistory::shortLocation(m_projectFile) + QDir::separator()
+                  + QFileInfo(m_projectFile).completeBaseName();
   }
   if (m_verificationMode) {
     projectName += tr(" [Verification]");

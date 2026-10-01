@@ -165,6 +165,8 @@ void NewOpenProjectPanel::addHistoryEntry(const ProjectHistory::Entry& entry) {
   rowLayout->addLayout(nameLayout);
 
   QStringList details;
+  // First, because it is what tells apart projects that all have the same name.
+  details << ProjectHistory::shortLocation(entry.filePath);
   if (entry.pageCount > 0) {
     details << ((entry.pageCount == 1) ? tr("1 page") : tr("%1 pages").arg(entry.pageCount));
   }

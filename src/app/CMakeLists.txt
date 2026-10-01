@@ -27,6 +27,7 @@ set(gui_only_sources
     RetouchView.cpp RetouchView.h
     RetouchPanel.cpp RetouchPanel.h
     RetouchController.cpp RetouchController.h
+    AppUpdater.cpp AppUpdater.h
     SystemLoadWidget.cpp SystemLoadWidget.h
     MainWindow.cpp MainWindow.h
     StressDriver.cpp StressDriver.h

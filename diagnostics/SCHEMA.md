@@ -30,7 +30,7 @@ The environment variable overrides the INI.
 |---|---|---|
 | `t` | number | milliseconds since diagnostics started, monotonic, excludes sleep/hibernation, 3 decimals |
 | `ev` | string | record type, see below |
-| `th` | string | thread role: `gui`, `worker`, `thumbs`, `bgexec`, `retouch`, `diag`, or `other` |
+| `th` | string | thread role: `gui`, `worker`, `thumbs`, `bgexec`, `retouch`, `update`, `diag`, or `other` |
 | `tid` | number | OS thread id |
 
 ## Record types
@@ -210,6 +210,7 @@ Worker and helper threads:
 | `file.rename` (`attempts`, `slept_ms`, `error`, `ok`) | any | rename with retries |
 | `retouch.rewrite` (`format`, `edits`, `ok`) | retouch | writing retouched pixels into an image file |
 | `retouch.backup.keep` (`copied`), `retouch.backup.restore` | retouch | keeping, and putting back, the original of a retouched file |
+| `update.find` (`candidates`, `found`) | update | looking for a newer installer where the office keeps them |
 
 Notes:
 

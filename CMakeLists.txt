@@ -315,6 +315,36 @@ else()
   set(TRANSLATION_DIRS ".:translations:../share/${APPLICATION_NAME}/translations")
   set(PLUGIN_DIRS ".:../lib/${APPLICATION_NAME}")
 endif()
+# Which DGI release this is: N of the vX.Y.Z-dgi.N tag. Compiled into the
+# application, which compares it with the installer on the server to know when
+# it is out of date, and written into the installer's version information for
+# that comparison. Taken from the tag being built in CI, else from git describe
+# in a working copy; 0 when neither can tell.
+set(DGI_BUILD_NUMBER "" CACHE STRING "N of the vX.Y.Z-dgi.N release being built; empty to take it from the tag")
+set(DGI_BUILD "${DGI_BUILD_NUMBER}")
+if (DGI_BUILD STREQUAL "" AND "$ENV{GITHUB_REF_NAME}" MATCHES "^v[0-9.]+-dgi\\.([0-9]+)$")
+  set(DGI_BUILD "${CMAKE_MATCH_1}")
+endif()
+if (DGI_BUILD STREQUAL "")
+  find_package(Git QUIET)
+  if (GIT_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" describe --tags --match "v*-dgi.*" --abbrev=0
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        RESULT_VARIABLE dgi_describe_result
+        OUTPUT_VARIABLE dgi_describe_tag
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if (dgi_describe_result EQUAL 0 AND dgi_describe_tag MATCHES "-dgi\\.([0-9]+)$")
+      set(DGI_BUILD "${CMAKE_MATCH_1}")
+    endif()
+  endif()
+endif()
+if (NOT DGI_BUILD MATCHES "^[0-9]+$")
+  set(DGI_BUILD 0)
+endif()
+message(STATUS "DGI build: ${DGI_BUILD}")
+
 configure_file(config.h.in "${CMAKE_BINARY_DIR}/config.h" @ONLY)
 file(READ "${CMAKE_BINARY_DIR}/config.h" config_h_contents)
 set(enable_developer_version_default OFF)
@@ -525,6 +555,18 @@ if (WIN32)
   # which produced Start Menu shortcuts pointing at a path that exists only on
   # the machine the installer was built on.
   set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
+
+  # The release in the installer's file properties, where the application reads
+  # it to tell whether an installer it finds on the server is newer than itself.
+  # Single quotes, which NSIS accepts, so that nothing needs escaping on the way
+  # through CPackConfig.cmake.
+  set(CPACK_NSIS_DEFINES "VIProductVersion '${APPLICATION_VERSION_MAJOR}.${APPLICATION_VERSION_MINOR}.${APPLICATION_VERSION_PATCH}.${DGI_BUILD}'
+  VIAddVersionKey /LANG=1033 'ProductName' '${APPLICATION_DISPLAY_NAME}'
+  VIAddVersionKey /LANG=1033 'ProductVersion' '${VERSION}-dgi.${DGI_BUILD}'
+  VIAddVersionKey /LANG=1033 'FileVersion' '${VERSION}-dgi.${DGI_BUILD}'
+  VIAddVersionKey /LANG=1033 'FileDescription' '${APPLICATION_DISPLAY_NAME} installer'
+  VIAddVersionKey /LANG=1033 'CompanyName' '${APPLICATION_VENDOR}'
+  VIAddVersionKey /LANG=1033 'LegalCopyright' 'GNU GPL v3'")
 
   set(CPACK_NSIS_MUI_ICON "${SCANTAILOR_RESOURCES_DIR}/win32/scantailor.ico")
   set(CPACK_NSIS_MUI_UNIICON "${SCANTAILOR_RESOURCES_DIR}/win32/scantailor.ico")

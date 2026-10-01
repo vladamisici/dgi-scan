@@ -34,6 +34,27 @@ project is built from a separate copy of it, the copy gets the same changes,
 scaled to it, and the page's output is regenerated the next time the steps
 are run.
 
+### Updates
+
+An installed copy looks for a newer installer in `\\server1\kit\PoD_and_XML`
+shortly after it starts and then every hour. Every `scantailor-dgi-*-win64.exe`
+there counts, by the release in its file properties (`1.0.16-dgi.12`), since
+the file name stays the same from one release to the next. When one is newer,
+the operator is told, in Romanian, "Versiune noua disponibila". With no project
+open, the application closes, installs it and starts again, after a 20 second
+countdown that can be stopped; with a project open, a link in the status bar
+does the same, and the update is otherwise offered when the project or the
+application is closed. Installing needs the administrator prompt answered.
+
+The installer runs from a local copy, once the application has ended and only
+if nothing else runs from the installation folder: it removes the old version
+first. An update that did not take is reported at the next start, with the
+installer's path for installing by hand, and is not offered again unasked.
+
+The settings file holds `update/location` (a folder or an installer),
+`update/countdownSeconds` (0 waits for an answer) and `update/enabled`; the
+portable build does not update itself unless that is set.
+
 The upstream documentation follows.
 
 ---
