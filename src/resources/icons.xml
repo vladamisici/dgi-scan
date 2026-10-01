@@ -191,4 +191,37 @@
   <icon name="magnifying-glass" styled="on">
     <file>:icons/magnifying-glass.svg</file>
   </icon>
+  <icon name="retouch-rect" styled="on">
+    <file>:/icons/retouch-rect.svg</file>
+  </icon>
+  <icon name="retouch-brush" styled="on">
+    <file>:/icons/retouch-brush.svg</file>
+  </icon>
+  <icon name="retouch-select" styled="on">
+    <file>:/icons/retouch-select.svg</file>
+  </icon>
+  <icon name="retouch-picker" styled="on">
+    <file>:/icons/retouch-picker.svg</file>
+  </icon>
+  <icon name="retouch-redo" styled="on">
+    <file>:/icons/retouch-redo.svg</file>
+  </icon>
+  <icon name="retouch-save" styled="on">
+    <file>:/icons/retouch-save.svg</file>
+  </icon>
+  <icon name="retouch-close" styled="on">
+    <file>:/icons/retouch-close.svg</file>
+  </icon>
+  <icon name="retouch-restore" styled="on">
+    <file>:/icons/retouch-restore.svg</file>
+  </icon>
+  <icon name="retouch-fill" styled="on">
+    <file>:/icons/retouch-fill.svg</file>
+  </icon>
+  <icon name="panel-collapse" styled="on">
+    <file>:/icons/panel-collapse.svg</file>
+  </icon>
+  <icon name="panel-expand" styled="on">
+    <file>:/icons/panel-expand.svg</file>
+  </icon>
 </icons>

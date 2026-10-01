@@ -21,7 +21,14 @@
 #include "ImageViewBase.h"
 
 namespace {
-QWidget* panelWithHeader(const QString& title, QWidget* content, const bool editable, QWidget* parent) {
+const char EDITABLE_HEADER_STYLE[]
+    = "QLabel { color: palette(highlighted-text); background: palette(highlight); font-weight: bold; padding: 5px; }";
+
+QWidget* panelWithHeader(const QString& title,
+                         QWidget* content,
+                         const bool editable,
+                         QWidget* parent,
+                         QLabel** headerOut = nullptr) {
   auto* panel = new QFrame(parent);
   panel->setObjectName(QLatin1String("verificationPanel"));
 
@@ -34,12 +41,14 @@ QWidget* panelWithHeader(const QString& title, QWidget* content, const bool edit
   header->setObjectName(editable ? QLatin1String("verificationEditableHeader")
                                  : QLatin1String("verificationOriginalHeader"));
   header->setStyleSheet(editable
-                            ? QLatin1String("QLabel { color: palette(highlighted-text); background: palette(highlight); "
-                                            "font-weight: bold; padding: 5px; }")
+                            ? QLatin1String(EDITABLE_HEADER_STYLE)
                             : QLatin1String("QLabel { color: palette(window-text); background: palette(alternate-base); "
                                             "font-weight: bold; padding: 5px; }"));
   layout->addWidget(header);
   layout->addWidget(content, 1);
+  if (headerOut) {
+    *headerOut = header;
+  }
   return panel;
 }
 }  // namespace
@@ -91,7 +100,13 @@ VerificationView::VerificationView(QWidget* projectView,
                                    const ImageId& originalImage,
                                    const QString& projectImagePath,
                                    QWidget* parent)
-    : QWidget(parent), m_originalStack(new QStackedWidget(this)), m_loadingWidget(new QLabel(this)) {
+    : QWidget(parent),
+      m_originalStack(new QStackedWidget(this)),
+      m_loadingWidget(new QLabel(this)),
+      m_inputHeader(nullptr),
+      m_projectView(projectView),
+      m_projectImagePath(projectImagePath),
+      m_editing(false) {
   auto* loadingLabel = static_cast<QLabel*>(m_loadingWidget);
   loadingLabel->setAlignment(Qt::AlignCenter);
   loadingLabel->setWordWrap(true);
@@ -100,7 +115,7 @@ VerificationView::VerificationView(QWidget* projectView,
 
   auto* splitter = new QSplitter(Qt::Horizontal, this);
   splitter->setChildrenCollapsible(false);
-  splitter->addWidget(panelWithHeader(tr("INPUT - READ ONLY"), m_originalStack, false, splitter));
+  splitter->addWidget(panelWithHeader(tr("INPUT - READ ONLY"), m_originalStack, false, splitter, &m_inputHeader));
   splitter->addWidget(panelWithHeader(tr("PROJECT - EDITABLE"), projectView, true, splitter));
   splitter->setStretchFactor(0, 1);
   splitter->setStretchFactor(1, 1);
@@ -120,7 +135,19 @@ VerificationView::VerificationView(QWidget* projectView,
   }
 }
 
+void VerificationView::setInputEditor(QWidget* editor, const QString& title) {
+  m_editing = true;
+  m_originalStack->setCurrentIndex(m_originalStack->addWidget(editor));
+  m_inputHeader->setText(title);
+  m_inputHeader->setStyleSheet(QLatin1String(EDITABLE_HEADER_STYLE));
+  editor->setFocus();
+}
+
 void VerificationView::originalLoaded(const QImage& image, const QImage& downscaled) {
+  if (m_editing) {
+    // The editor shows the same file; the read-only copy would take its place.
+    return;
+  }
   if (image.isNull()) {
     showOriginalMessage(tr("The matching original image could not be opened."));
     return;
@@ -131,6 +158,9 @@ void VerificationView::originalLoaded(const QImage& image, const QImage& downsca
 }
 
 void VerificationView::showOriginalMessage(const QString& message) {
+  if (m_editing) {
+    return;
+  }
   auto* label = static_cast<QLabel*>(m_loadingWidget);
   label->setText(message);
   label->setToolTip(message);

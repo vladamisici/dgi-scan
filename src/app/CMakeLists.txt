@@ -23,6 +23,10 @@ set(gui_only_sources
     ProjectFilesDialog.cpp ProjectFilesDialog.h
     NewOpenProjectPanel.cpp NewOpenProjectPanel.h
     VerificationView.cpp VerificationView.h
+    RetouchTypes.h
+    RetouchView.cpp RetouchView.h
+    RetouchPanel.cpp RetouchPanel.h
+    RetouchController.cpp RetouchController.h
     SystemLoadWidget.cpp SystemLoadWidget.h
     MainWindow.cpp MainWindow.h
     StressDriver.cpp StressDriver.h

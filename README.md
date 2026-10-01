@@ -10,6 +10,30 @@ Downloads are on the [releases page](https://github.com/vladamisici/dgi-scan/rel
 the installer for normal use, the portable ZIP where administrator rights are
 not available.
 
+### Retouching input images
+
+The Retouch panel, on the left of the page, paints over a page's input image -
+to take a library stamp off a title page, say - without exporting the page to
+another program. Rectangle, Brush and Select object (one click takes a whole
+stamp: its letters and its frame) fill with white, with a colour picked from
+the page, or with the colour of the paper around each change. The panel
+collapses to a strip of icons when it is not needed; Tools > Retouch Panel
+hides it altogether.
+
+Nothing is written until Save image. The file keeps its format: TIFF is
+re-encoded with its own compression, bit depth, resolution and colour profile,
+and JPEG has only the 8x8 blocks that changed encoded again, the rest carried
+over bit for bit. Before a file is first changed, a copy of the original is
+kept in the project's output folder, under `cache/retouch-originals`, and
+Restore original puts it back. Files are written in place, never through a
+rename: the network shares the operators work on can refuse renaming and
+deleting while allowing writes.
+
+In verification mode the input image on the left is the one edited. When the
+project is built from a separate copy of it, the copy gets the same changes,
+scaled to it, and the page's output is regenerated the next time the steps
+are run.
+
 The upstream documentation follows.
 
 ---

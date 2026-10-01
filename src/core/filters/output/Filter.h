@@ -16,6 +16,7 @@
 #include "PictureZonePropFactory.h"
 #include "SafeDeletingQObjectPtr.h"
 
+class ImageId;
 class PageSelectionAccessor;
 class ThumbnailPixmapCache;
 class OutputFileNameGenerator;
@@ -49,6 +50,15 @@ class Filter : public AbstractFilter {
   void loadSettings(const ProjectReader& reader, const QDomElement& filtersEl) override;
 
   void loadDefaultSettings(const PageInfo& pageInfo) override;
+
+  /**
+   * \brief Makes every page cut from \p imageId produce its output afresh.
+   *
+   * For when the image file itself has been changed. The output is otherwise
+   * regenerated only when the file's size changes, and painting over part of
+   * an uncompressed scan leaves the size exactly as it was.
+   */
+  void invalidateOutputFor(const ImageId& imageId);
 
   std::shared_ptr<Task> createTask(const PageId& pageId,
                                    std::shared_ptr<ThumbnailPixmapCache> thumbnailCache,

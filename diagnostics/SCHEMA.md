@@ -30,7 +30,7 @@ The environment variable overrides the INI.
 |---|---|---|
 | `t` | number | milliseconds since diagnostics started, monotonic, excludes sleep/hibernation, 3 decimals |
 | `ev` | string | record type, see below |
-| `th` | string | thread role: `gui`, `worker`, `thumbs`, `bgexec`, `diag`, or `other` |
+| `th` | string | thread role: `gui`, `worker`, `thumbs`, `bgexec`, `retouch`, `diag`, or `other` |
 | `tid` | number | OS thread id |
 
 ## Record types
@@ -173,6 +173,7 @@ GUI thread (`th: gui`):
 | `project.open.parse_xml`, `project.open.reader`, `project.opened` | opening a project |
 | `project.switch` (`pages`) and phases `.retire`, `.stages`, `.thumb_cache`, `.reset_thumbs`, `.update_main_area` | switching project |
 | `project.release_retired` | freeing the previous project's objects |
+| `retouch.select` (`found`, `reach`: how far the search had to look, in pixels) | Retouch: Select object |
 | `project.writer.write` (`bytes`, `ok`) with phases `.build_dom`, `.serialize`, `.commit` | any thread |
 | `ui.stage_switch` (`from`, `to`) | switching processing stage |
 | `propagate.content_box`, `propagate.page_orientation` | stage-switch propagation |
@@ -207,6 +208,8 @@ Worker and helper threads:
 | `thumbs.bg.load` (`source`: `cache` / `image`) | thumbs | background thumbnail loading |
 | `file.atomic_commit` (`durable`, `ok`) with phases `.flush`, `.sync`, `.rename` | any | atomic file replacement |
 | `file.rename` (`attempts`, `slept_ms`, `error`, `ok`) | any | rename with retries |
+| `retouch.rewrite` (`format`, `edits`, `ok`) | retouch | writing retouched pixels into an image file |
+| `retouch.backup.keep` (`copied`), `retouch.backup.restore` | retouch | keeping, and putting back, the original of a retouched file |
 
 Notes:
 

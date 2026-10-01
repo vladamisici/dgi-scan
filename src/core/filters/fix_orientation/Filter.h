@@ -9,6 +9,7 @@
 #include "AbstractFilter.h"
 #include "FilterResult.h"
 #include "NonCopyable.h"
+#include "OrthogonalRotation.h"
 #include "PageView.h"
 #include "SafeDeletingQObjectPtr.h"
 
@@ -63,6 +64,9 @@ class Filter : public AbstractFilter {
   std::shared_ptr<CacheDrivenTask> createCacheDrivenTask(std::shared_ptr<page_split::CacheDrivenTask> nextTask);
 
   OptionsWidget* optionsWidget();
+
+  /** \brief The rotation the project applies to \p imageId. */
+  OrthogonalRotation rotationFor(const ImageId& imageId) const;
 
  private:
   void writeParams(QDomDocument& doc, QDomElement& filterEl, const ImageId& imageId, int numericId) const;

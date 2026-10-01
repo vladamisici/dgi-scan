@@ -126,7 +126,7 @@ target_link_libraries(
     PRIVATE TIFF::TIFF PNG::PNG ZLIB::ZLIB JPEG::JPEG
     PUBLIC Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Xml Qt5::Network Qt5::OpenGL Qt5::Svg
     imageproc zones
-    fix_orientation page_split deskew select_content page_layout output)
+    fix_orientation page_split deskew select_content page_layout output retouch)
 if (WIN32)
   # dbghelp provides MiniDumpWriteDump, used by CrashHandler so that a crash
   # leaves a usable report behind instead of the application simply vanishing,
@@ -150,3 +150,4 @@ add_subdirectory(filters/deskew)
 add_subdirectory(filters/select_content)
 add_subdirectory(filters/page_layout)
 add_subdirectory(filters/output)
+add_subdirectory(retouch)

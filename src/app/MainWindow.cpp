@@ -66,6 +66,7 @@
 #include "ProjectWriter.h"
 #include "ProjectHistory.h"
 #include "RelinkingDialog.h"
+#include "RetouchPanel.h"
 #include "ScopedIncDec.h"
 #include "SettingsDialog.h"
 #include "SkinnedButton.h"
@@ -149,6 +150,7 @@ MainWindow::MainWindow()
 
   setupUi(this);
   setupIcons();
+  setupRetouch();
 
   sortOptions->setVisible(false);
 
@@ -408,6 +410,8 @@ void MainWindow::switchToNewProject(const std::shared_ptr<ProjectPages>& pages,
                                     const ProjectReader* projectReader) {
   DIAG_SCOPE(switchScope, "project.switch");
   switchScope.attr(diag::Attr("pages", static_cast<qint64>(pages->numImages())));
+  // Whoever is switching has asked about unsaved retouching already, or could not.
+  m_retouch->abandon();
   stopBatchProcessing(CLEAR_MAIN_AREA);
   m_interactiveQueue->cancelAndClear();
   // Everything below replaces m_pages, m_stages and the thumbnail cache, which
@@ -497,6 +501,7 @@ void MainWindow::switchToNewProject(const std::shared_ptr<ProjectPages>& pages,
   // one place that reliably knows whether autosave should be running.
   CrashHandler::setCurrentProjectFile(m_projectFile);
   updateAutoSaveTimer();
+  m_retouch->setAvailable(retouchAllowed());
 
   if (!QDir(outDir).exists()) {
     showRelinkingDialog();
@@ -883,7 +888,7 @@ void MainWindow::setImageWidget(QWidget* widget, const Ownership ownership, Debu
   }
 
   QWidget* presentedWidget = widget;
-  if (m_verificationMode && !overlay && ownership == TRANSFER_OWNERSHIP
+  if (m_verificationMode && !overlay && ownership == TRANSFER_OWNERSHIP && !m_showingRetouchEditor
       && Utils::castOrFindChild<ImageViewBase*>(widget)) {
     const PageInfo page(m_thumbSequence->selectionLeader());
     if (!page.isNull()) {
@@ -1465,6 +1470,11 @@ void MainWindow::startBatchProcessing() {
   if (isBatchProcessingInProgress() || !isProjectLoaded()) {
     return;
   }
+  // The batch replaces the page area, and would take the source image being
+  // retouched along with it.
+  if (!m_retouch->finish()) {
+    return;
+  }
 
   m_interactiveQueue->cancelAndClear();
 
@@ -1487,6 +1497,7 @@ void MainWindow::startBatchProcessing() {
   removeFilterOptionsWidget();
   filterList->setBatchProcessingInProgress(true);
   filterList->setEnabled(false);
+  m_retouch->setAvailable(false);
 
   BackgroundTaskPtr task(m_batchQueue->takeForProcessing());
   if (task) {
@@ -1529,6 +1540,7 @@ void MainWindow::stopBatchProcessing(MainAreaAction mainArea) {
 
   filterList->setBatchProcessingInProgress(false);
   filterList->setEnabled(true);
+  m_retouch->setAvailable(retouchAllowed());
 
   switch (mainArea) {
     case UPDATE_MAIN_AREA:
@@ -1694,6 +1706,10 @@ void MainWindow::fixedDpiSubmitted() {
  * the file dialog, or having the save fail, threw the work away.
  */
 bool MainWindow::saveProjectTriggered() {
+  // Ctrl+S while retouching is meant for the image as much as for the project.
+  // A failure has been reported; the project is still worth saving.
+  m_retouch->saveForProjectSave();
+
   if (m_projectFile.isEmpty()) {
     return saveProjectAsTriggered();
   }
@@ -1977,8 +1993,9 @@ QStringList MainWindow::selectVerificationInputDirectories(const QStringList& in
 
   auto* layout = new QVBoxLayout(&dialog);
   auto* explanation = new QLabel(
-      tr("Add the folder or folders containing the unedited input images. They are used only for comparison and "
-         "will never be modified."),
+      tr("Add the folder or folders containing the unedited input images. They are shown for comparison, and are "
+         "only changed when an input image is retouched and saved - with a copy of the original kept in the "
+         "project's output folder."),
       &dialog);
   explanation->setWordWrap(true);
   layout->addWidget(explanation);
@@ -2279,6 +2296,12 @@ PageView MainWindow::getCurrentView() const {
 }
 
 void MainWindow::updateMainArea() {
+  // Whatever is about to be shown would replace the image being retouched.
+  if (m_retouch && m_retouch->isActive() && !m_retouch->finish()) {
+    keepRetouchedPageSelected();
+    return;
+  }
+
   if (m_pages->numImages() == 0) {
     filterList->setBatchProcessingPossible(false);
     setDockWidgetsVisible(false);
@@ -2303,6 +2326,9 @@ void MainWindow::updateMainArea() {
       }
       loadPageInteractive(page);
     }
+  }
+  if (m_retouch) {
+    m_retouch->pageChanged();
   }
 }
 
@@ -2389,6 +2415,10 @@ bool MainWindow::closeProjectInteractive() {
 
   if (!isProjectLoaded()) {
     return true;
+  }
+  // The source image being retouched first: its changes go into a file of their own.
+  if (!m_retouch->finish()) {
+    return false;
   }
 
   // No scope around the whole close: it can wait on the save prompt and the
@@ -2884,6 +2914,9 @@ void MainWindow::changeEvent(QEvent* event) {
 void MainWindow::setDockWidgetsVisible(bool state) {
   filterDockWidget->setVisible(state);
   thumbnailsDockWidget->setVisible(state);
+  if (m_retouchPanel) {
+    m_retouchPanel->setVisible(state && m_retouchPanelAction->isChecked());
+  }
 }
 
 void MainWindow::scaleThumbnails(int scaleFactor) {
@@ -3019,4 +3052,161 @@ void MainWindow::reloadCurrentPage() {
     return;
 
   updateMainArea();
+}
+
+void MainWindow::setupRetouch() {
+  m_retouchPanel = new RetouchPanel(centralwidget);
+  // On the left of the page, where the tools of an image editor are.
+  horizontalLayout->insertWidget(0, m_retouchPanel);
+  m_retouch = std::make_unique<RetouchController>(static_cast<RetouchHost&>(*this), *m_retouchPanel, this);
+
+  m_retouchPanelAction = new QAction(tr("Retouch Panel"), this);
+  m_retouchPanelAction->setCheckable(true);
+  m_retouchPanelAction->setStatusTip(tr("Show the tools for painting over the source image of a page."));
+  m_retouchPanelAction->setChecked(QSettings().value("retouch/visible", true).toBool());
+  // With the other display options, after the low-resolution display.
+  const QList<QAction*> toolsActions(menuDebug->actions());
+  const int lowResIdx = toolsActions.indexOf(actionLowResDisplay);
+  menuDebug->insertAction(((lowResIdx >= 0) && (lowResIdx + 1 < toolsActions.size())) ? toolsActions[lowResIdx + 1]
+                                                                                        : nullptr,
+                          m_retouchPanelAction);
+  connect(m_retouchPanelAction, &QAction::toggled, this, [this](const bool checked) {
+    if (!checked && m_retouch->isActive()) {
+      if (!m_retouch->finish()) {
+        const QSignalBlocker blocker(m_retouchPanelAction);
+        m_retouchPanelAction->setChecked(true);
+        return;
+      }
+      updateMainArea();
+    }
+    QSettings().setValue("retouch/visible", checked);
+    m_retouchPanel->setVisible(checked && filterDockWidget->isVisible());
+  });
+}
+
+PageInfo MainWindow::retouchCurrentPage() const {
+  return m_thumbSequence->selectionLeader();
+}
+
+bool MainWindow::retouchAllowed() const {
+  return isProjectLoaded() && !isBatchProcessingInProgress();
+}
+
+bool MainWindow::retouchTarget(const PageInfo& page, RetouchTarget* target, QString* whyNot) const {
+  // The project's own image of the page gets the changes in either mode.
+  target->projectImageId = page.imageId();
+  target->projectImageSize = page.metadata().size();
+  if (m_verificationMode) {
+    // The input image on the left, as it is shown there: the file's own
+    // resolution, unrotated. When it is a separate copy, saving changes the
+    // project's image too, so that the output loses what the input did.
+    const ImageId original(verificationOriginalFor(page.imageId()));
+    if (original.isNull()) {
+      *whyNot = tr("No input image matching this page was found in the verification folders, so there is "
+                   "nothing to retouch.");
+      return false;
+    }
+    target->imageId = original;
+    target->dpi = Dpi();
+    target->rotation = OrthogonalRotation();
+    target->title = tr("INPUT - RETOUCHING");
+    return true;
+  }
+  target->imageId = page.imageId();
+  target->dpi = page.metadata().dpi();
+  target->rotation = m_stages->fixOrientationFilter()->rotationFor(page.imageId());
+  target->title = tr("SOURCE IMAGE - RETOUCHING");
+  return true;
+}
+
+ImageViewBase* MainWindow::retouchProjectView() const {
+  // The output stage shows the output, made from the image, not the image.
+  if (!m_verificationMode || isOutputFilter()) {
+    return nullptr;
+  }
+  VerificationView* verification = currentVerificationView();
+  return verification ? Utils::castOrFindChild<ImageViewBase*>(verification->projectView()) : nullptr;
+}
+
+VerificationView* MainWindow::currentVerificationView() const {
+  for (int i = 0; i < m_imageFrameLayout->count(); ++i) {
+    if (auto* view = Utils::castOrFindChild<VerificationView*>(m_imageFrameLayout->widget(i))) {
+      return view;
+    }
+  }
+  return nullptr;
+}
+
+QString MainWindow::retouchOutputDirectory() const {
+  return m_outFileNameGen.outDir();
+}
+
+std::shared_ptr<ThumbnailPixmapCache> MainWindow::retouchThumbnailCache() const {
+  return m_thumbnailCache;
+}
+
+void MainWindow::retouchShowEditor(QWidget* editor, const QString& title) {
+  // A page result arriving now would replace the editor.
+  m_interactiveQueue->cancelAndClear();
+
+  if (m_verificationMode) {
+    // In place of the input image, with the project's view of the page left
+    // as it is on the right - if that view is of this page, and finished: one
+    // still being processed would replace the editor when it arrives.
+    VerificationView* verification = currentVerificationView();
+    const PageInfo page(m_thumbSequence->selectionLeader());
+    const bool stillLoading = (m_imageFrameLayout->indexOf(m_processingIndicationWidget.get()) != -1);
+    if (verification && !stillLoading && !page.isNull()
+        && (verification->projectImagePath() == page.imageId().filePath())) {
+      verification->setInputEditor(editor, title);
+      return;
+    }
+  }
+
+  // On its own, under a header saying what it is.
+  auto* frame = new QFrame();
+  auto* layout = new QVBoxLayout(frame);
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->setSpacing(0);
+  auto* header = new QLabel(title, frame);
+  header->setAlignment(Qt::AlignCenter);
+  header->setStyleSheet(QLatin1String("QLabel { color: palette(highlighted-text); background: palette(highlight); "
+                                      "font-weight: bold; padding: 5px; }"));
+  layout->addWidget(header);
+  layout->addWidget(editor, 1);
+  // Verification mode without its side-by-side view - the page cannot be shown
+  // there yet - must not have the editor wrapped as if it were the page.
+  m_showingRetouchEditor = true;
+  setImageWidget(frame, TRANSFER_OWNERSHIP);
+  m_showingRetouchEditor = false;
+  editor->setFocus();
+}
+
+void MainWindow::retouchSessionEnded() {
+  updateMainArea();
+}
+
+void MainWindow::retouchSourceReplaced(const ImageId& imageId) {
+  // The output is otherwise only regenerated when the source file's size
+  // changes, which painting over an uncompressed scan does not do: without
+  // this, running the output step again would keep the old pages.
+  m_stages->outputFilter()->invalidateOutputFor(imageId);
+  // The thumbnail file was rewritten with the image; the list just has to ask for it again.
+  for (const PageInfo& page : m_thumbSequence->toPageSequence()) {
+    if (page.imageId() == imageId) {
+      m_thumbSequence->invalidateThumbnail(page.id());
+    }
+  }
+}
+
+void MainWindow::keepRetouchedPageSelected() {
+  const PageId editing(m_retouch->sessionPageId());
+  if (m_thumbSequence->selectionLeader().imageId() == editing.imageId()) {
+    return;
+  }
+  // The stage may have changed meanwhile, and with it the way the image is cut into pages.
+  if (!m_thumbSequence->setSelection(editing) && !m_thumbSequence->setSelection(PageId(editing.imageId(), PageId::LEFT_PAGE))
+      && !m_thumbSequence->setSelection(PageId(editing.imageId(), PageId::RIGHT_PAGE))) {
+    m_thumbSequence->setSelection(PageId(editing.imageId(), PageId::SINGLE_PAGE));
+  }
 }

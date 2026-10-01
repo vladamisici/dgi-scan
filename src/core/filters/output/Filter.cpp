@@ -148,6 +148,12 @@ std::shared_ptr<CacheDrivenTask> Filter::createCacheDrivenTask(const OutputFileN
   return std::make_shared<CacheDrivenTask>(m_settings, outFileNameGen);
 }
 
+void Filter::invalidateOutputFor(const ImageId& imageId) {
+  for (const PageId::SubPage subPage : {PageId::SINGLE_PAGE, PageId::LEFT_PAGE, PageId::RIGHT_PAGE}) {
+    m_settings->removeOutputParams(PageId(imageId, subPage));
+  }
+}
+
 void Filter::loadDefaultSettings(const PageInfo& pageInfo) {
   if (!m_settings->isParamsNull(pageInfo.id()))
     return;

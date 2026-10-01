@@ -27,6 +27,7 @@
 #include "PageId.h"
 #include "PageRange.h"
 #include "PageView.h"
+#include "RetouchController.h"
 #include "SelectedPage.h"
 #include "StatusBarPanel.h"
 #include "ThumbnailSequence.h"
@@ -63,8 +64,10 @@ class OutOfMemoryDialog;
 class QLineF;
 class QRectF;
 class QLayout;
+class RetouchPanel;
+class VerificationView;
 
-class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::MainWindow {
+class MainWindow : public QMainWindow, private FilterUiInterface, private RetouchHost, private Ui::MainWindow {
   DECLARE_NON_COPYABLE(MainWindow)
 
   Q_OBJECT
@@ -388,6 +391,33 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void setupIcons();
 
+  // RetouchHost
+  PageInfo retouchCurrentPage() const override;
+
+  bool retouchAllowed() const override;
+
+  bool retouchTarget(const PageInfo& page, RetouchTarget* target, QString* whyNot) const override;
+
+  QString retouchOutputDirectory() const override;
+
+  std::shared_ptr<ThumbnailPixmapCache> retouchThumbnailCache() const override;
+
+  void retouchShowEditor(QWidget* editor, const QString& title) override;
+
+  void retouchSessionEnded() override;
+
+  void retouchSourceReplaced(const ImageId& imageId) override;
+
+  /** \brief Puts the page being retouched back as the selected one, after the operator chose to keep editing. */
+  void keepRetouchedPageSelected();
+
+  ImageViewBase* retouchProjectView() const override;
+
+  /** \brief The side-by-side view on screen, if verification mode is showing one. */
+  VerificationView* currentVerificationView() const;
+
+  void setupRetouch();
+
   QStringList selectVerificationInputDirectories(const QStringList& initialDirectories = QStringList());
 
   void rebuildVerificationFileIndex();
@@ -449,6 +479,11 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   QActionGroup* m_unitsMenuActionGroup;
   QTimer m_maxLogicalThumbSizeUpdater;
   QTimer m_sceneItemsPosUpdater;
+  RetouchPanel* m_retouchPanel = nullptr;
+  QAction* m_retouchPanelAction = nullptr;
+  std::unique_ptr<RetouchController> m_retouch;
+  /** Set while the retouch editor is put on screen on its own, which verification mode must not wrap. */
+  bool m_showingRetouchEditor = false;
 };
 
 
