@@ -39,6 +39,10 @@ input images are the ones the project takes its pages from, so the left side
 is the very file the project processes. The button's arrow chooses other
 folders. Each side's header names the folder its image comes from; at the
 Output stage the right side is the output, and retouching it happens there.
+The button at the end of the input's header minimizes it to a strip at the
+left, which brings it back when clicked; that, and the width given to each
+side, carry over from page to page and to the next session. A minimized input
+is not even loaded, so paging stays as fast as without it.
 
 Compare with Input on the start page opens a project that way directly, and
 the recent list reopens a project the way it was left. Folders remembered

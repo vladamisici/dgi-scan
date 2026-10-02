@@ -6,9 +6,12 @@
 
 #include <QWidget>
 
-class ImageId;
+#include "ImageId.h"
+
+class QFrame;
 class QImage;
 class QLabel;
+class QSplitter;
 class QStackedWidget;
 
 /**
@@ -19,6 +22,11 @@ class QStackedWidget;
  * right side is the regular ScanTailor view, unchanged, so every interaction
  * and save continues through the normal project pipeline. Each side's header
  * names the folder its image comes from.
+ *
+ * The input side can be minimized to a strip at the left, from which it comes
+ * back. That, and how the width is shared between the sides, carries over from
+ * page to page and from one session to the next: the view is made anew for
+ * every page shown.
  */
 class VerificationView : public QWidget {
  public:
@@ -61,15 +69,30 @@ class VerificationView : public QWidget {
   class ImageLoaderTask;
 
   void originalLoaded(const QImage& image, const QImage& downscaled);
+
   void showOriginalMessage(const QString& message);
+
+  /** \brief Minimizes the input side to the strip at the left, or brings it back. */
+  void setInputMinimized(bool minimized);
+
+  /** \brief Starts loading the input image, if it is wanted and not loading yet. */
+  void loadOriginal();
 
   QStackedWidget* m_originalStack;
   QStackedWidget* m_projectStack;
   QWidget* m_loadingWidget;
+  QSplitter* m_splitter;
+  /** The input side, and the strip it is minimized to. */
+  QWidget* m_inputPanel;
+  QWidget* m_inputStrip;
+  QFrame* m_inputHeaderBar;
   QLabel* m_inputHeader;
   QLabel* m_projectHeader;
   QWidget* m_projectView;
   QString m_projectImagePath;
+  /** The input image, loaded once the input side is shown. */
+  ImageId m_originalImage;
+  bool m_originalRequested;
   /** The input image's folder as its header names it, separator included; empty without an image. */
   QString m_inputFolder;
   /** The same for the right side. */
