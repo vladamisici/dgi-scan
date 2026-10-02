@@ -25,8 +25,10 @@ the changes back into the page's input image, through the transform the
 output was made with - the crop, the skew, the rotation and the resolution -
 and writes them there. At the stages before, it paints on the input image
 directly. Either way the input image is what changes, and the page is then
-processed again: Select Content finds the content anew in what is left - a
-box set by hand stays where it was - and the margins and the output follow.
+processed again: Select Content finds the content anew in what is left,
+whatever the page's mode, which is kept - a box frozen or drawn by hand is
+replaced by the one found, frozen or manual in turn - and the margins and the
+output follow.
 In Compare with Input, each change painted on the output is shown on the input
 beside it as it is made, where it will land.
 

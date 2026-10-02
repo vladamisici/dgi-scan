@@ -74,8 +74,8 @@ class Filter : public AbstractFilter {
    *
    * For when the image's pixels have changed - a stamp painted over - which
    * leaves its geometry as it was, and the geometry is all that would make
-   * it be looked for again. Whatever the page's mode, but for a box set by
-   * hand, which stays where it was. \see Settings::requestRedetection()
+   * it be looked for again. Whatever the page's mode, which is kept.
+   * \see Settings::requestRedetection()
    */
   void redetect(const ImageId& imageId);
 

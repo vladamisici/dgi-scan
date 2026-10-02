@@ -50,11 +50,12 @@ class Settings {
 
   /**
    * \brief Asks for the page's content box to be found again, the next time
-   *        the page is processed, whatever its mode but manual.
+   *        the page is processed, whatever its mode.
    *
    * For when its image's pixels changed - a stamp painted out. Its mode is
-   * kept: a page whose box was found once and then frozen ("disabled") gets
-   * the box found in what is left, frozen in turn. Not saved with the project.
+   * kept: a page whose box was found once and then frozen ("disabled"), or set
+   * by hand, gets the box found in what is left, frozen or manual in turn. Not
+   * saved with the project.
    */
   void requestRedetection(const PageId& pageId);
 

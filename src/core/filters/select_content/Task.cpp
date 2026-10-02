@@ -135,11 +135,12 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data) 
   }
 
   // The image's pixels changed - a stamp painted out - so the content is found
-  // again in what is left: whatever the mode, but for a box set by hand. A
-  // page whose box was found once and then frozen keeps its mode, and gets the
-  // new box frozen in turn rather than the whole page its mode would give it.
+  // again in what is left, whatever the mode: a box found once and frozen, or
+  // drawn by hand, still has the stamp in it. The mode is kept, so the new box
+  // stays frozen or manual in turn - rather than becoming the whole page that
+  // "disabled" would make of it.
   const bool redetect = m_settings->isRedetectionRequested(m_pageId);
-  if (redetect && (newParams.contentDetectionMode() != MODE_MANUAL)) {
+  if (redetect) {
     const QRectF pageRect(newParams.pageRect());
     QRectF contentRect(ContentBoxFinder::findContentBox(status, data, pageRect, m_dbg.get()));
     if (contentRect.isValid()) {
