@@ -5,6 +5,7 @@
 
 #include "BinaryImage.h"
 #include "BitOps.h"
+#include <stdexcept>
 
 namespace imageproc {
 static QImage monoMsbToGrayscale(const QImage& src) {

@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "CompositeCacheDrivenTask.h"
+#include "Diagnostics.h"
 #include "ThumbnailCollector.h"
 
 class ThumbnailFactory::Collector : public ThumbnailCollector {
@@ -36,6 +37,7 @@ ThumbnailFactory::ThumbnailFactory(std::shared_ptr<ThumbnailPixmapCache> pixmapC
 ThumbnailFactory::~ThumbnailFactory() = default;
 
 std::unique_ptr<QGraphicsItem> ThumbnailFactory::get(const PageInfo& pageInfo) {
+  DIAG_COUNT("thumbs.factory.get");
   Collector collector(m_pixmapCache, m_maxSize);
   m_task->process(pageInfo, &collector);
   return collector.retrieveThumbnail();

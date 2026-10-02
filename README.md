@@ -1,3 +1,96 @@
+Scantailor-DGI
+==============
+
+A fork of [ScanTailor Advanced](https://github.com/4lex4/scantailor-advanced)
+maintained for DGI's scanning workflow. It is the upstream application plus the
+crash-safety, autosave and memory work described in
+[CRASH-SAFETY.md](CRASH-SAFETY.md). The image processing itself is unchanged.
+
+Downloads are on the [releases page](https://github.com/vladamisici/dgi-scan/releases):
+the installer for normal use, the portable ZIP where administrator rights are
+not available.
+
+### Retouching
+
+The Retouch panel, on the left of the page, paints over a page - to take a
+library stamp off a title page, say - without exporting it to another
+program. Rectangle, Brush and Select object (one click takes a whole stamp:
+its letters and its frame) fill with white, with a colour picked from the
+page, or with the colour of the paper around each change. The panel collapses
+to a strip of icons when it is not needed; Tools > Retouch Panel hides it
+altogether.
+
+At the Output stage it paints on the output, as it is shown. Saving carries
+the changes back into the page's input image, through the transform the
+output was made with - the crop, the skew, the rotation and the resolution -
+and writes them there. At the stages before, it paints on the input image
+directly. Either way the input image is what changes, and the page is then
+processed again: Select Content finds the content anew in what is left,
+whatever the page's mode, which is kept - a box frozen or drawn by hand is
+replaced by the one found, frozen or manual in turn - and the margins and the
+output follow.
+In Compare with Input, each change painted on the output is shown on the input
+beside it as it is made, where it will land.
+
+Nothing is written until Save changes. The file keeps its format: TIFF is
+re-encoded with its own compression, bit depth, resolution and colour profile,
+and JPEG has only the 8x8 blocks that changed encoded again, the rest carried
+over bit for bit. Before a file is first changed, a copy of the original is
+kept in the project's output folder, under `cache/retouch-originals`, and
+Restore original puts it back. Files are written in place, never through a
+rename: the network shares the operators work on can refuse renaming and
+deleting while allowing writes. A dewarped output cannot be matched to its
+input exactly, so such a page is retouched at an earlier stage.
+
+Version 1.0.16-dgi.14 kept retouching of the output with the project instead,
+painted over the output each time it was made. A project that has some still
+gets it, and Restore original removes it.
+
+### Comparing with the input
+
+Compare with Input (the button above the stages, or F7) shows each page of
+the open project beside its input image, and turns off the same way. The
+input images are the ones the project takes its pages from, so the left side
+is the very file the project processes. The button's arrow chooses other
+folders. Each side's header names the folder its image comes from; at the
+Output stage the right side is the output, and retouching it happens there.
+The button at the end of the input's header minimizes it to a strip at the
+left, which brings it back when clicked; that, and the width given to each
+side, carry over from page to page and to the next session. A minimized input
+is not even loaded, so paging stays as fast as without it.
+
+Compare with Input on the start page opens a project that way directly, and
+the recent list reopens a project the way it was left. Folders remembered
+from before that hold none of the project's pages give way to the project's
+own; if those do not hold them either, the project and the folders are shown,
+and other folders can be chosen.
+
+### Updates
+
+An installed copy looks for a newer installer in `\\server1\kit\PoD_and_XML`
+shortly after it starts and then every hour. Every `scantailor-dgi-*-win64.exe`
+there counts, by the release in its file properties (`1.0.16-dgi.12`), since
+the file name stays the same from one release to the next, once it has been
+unchanged for two minutes: one still being copied there is left alone. When one is newer,
+the operator is told, in Romanian, "Versiune noua disponibila". With no project
+open, the application closes, installs it and starts again, after a 20 second
+countdown that can be stopped; with a project open, a link in the status bar
+does the same, and the update is otherwise offered when the project or the
+application is closed. Installing needs the administrator prompt answered.
+
+The installer runs from a local copy, once the application has ended and only
+if nothing else runs from the installation folder: it removes the old version
+first. An update that did not take is reported at the next start, with the
+installer's path for installing by hand, and is not offered again unasked.
+
+The settings file holds `update/location` (a folder or an installer),
+`update/countdownSeconds` (0 waits for an answer) and `update/enabled`; the
+portable build does not update itself unless that is set.
+
+The upstream documentation follows.
+
+---
+
 ScanTailor Advanced
 ===================
 

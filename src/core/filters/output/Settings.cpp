@@ -27,6 +27,8 @@ void Settings::clear() {
   m_perPagePictureZones.clear();
   m_perPageFillZones.clear();
   m_perPageOutputProcessingParams.clear();
+  m_perPageRetouch.clear();
+  m_perPageOutputGeometry.clear();
 }
 
 void Settings::performRelinking(const AbstractRelinker& relinker) {
@@ -251,6 +253,36 @@ void Settings::setPictureZones(const PageId& pageId, const ZoneSet& zones) {
 void Settings::setFillZones(const PageId& pageId, const ZoneSet& zones) {
   const QMutexLocker locker(&m_mutex);
   Utils::mapSetValue(m_perPageFillZones, pageId, zones);
+}
+
+retouch::OutputLayer Settings::retouchForPage(const PageId& pageId) const {
+  const QMutexLocker locker(&m_mutex);
+  const auto it(m_perPageRetouch.find(pageId));
+  return (it != m_perPageRetouch.end()) ? it->second : retouch::OutputLayer();
+}
+
+void Settings::setRetouch(const PageId& pageId, const retouch::OutputLayer& layer) {
+  const QMutexLocker locker(&m_mutex);
+  if (layer.isEmpty()) {
+    m_perPageRetouch.erase(pageId);
+  } else {
+    Utils::mapSetValue(m_perPageRetouch, pageId, layer);
+  }
+}
+
+bool Settings::outputGeometry(const PageId& pageId, OutputGeometry* geometry) const {
+  const QMutexLocker locker(&m_mutex);
+  const auto it(m_perPageOutputGeometry.find(pageId));
+  if (it == m_perPageOutputGeometry.end()) {
+    return false;
+  }
+  *geometry = it->second;
+  return true;
+}
+
+void Settings::setOutputGeometry(const PageId& pageId, const OutputGeometry& geometry) {
+  const QMutexLocker locker(&m_mutex);
+  Utils::mapSetValue(m_perPageOutputGeometry, pageId, geometry);
 }
 
 PropertySet Settings::defaultPictureZoneProperties() const {

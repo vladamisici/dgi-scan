@@ -19,12 +19,12 @@ VS_VERSION_INFO VERSIONINFO
 		BEGIN
 			BLOCK "040904b0"
 			BEGIN
-				VALUE "CompanyName", "4lex4 <4lex49@zoho.com>\0"
-				VALUE "FileDescription", "ScanTailor Advanced\0"
+				VALUE "CompanyName", "@APPLICATION_VENDOR@\0"
+				VALUE "FileDescription", "@APPLICATION_DISPLAY_NAME@\0"
 				VALUE "FileVersion", "@VERSION@.0\0"
 				VALUE "LegalCopyright", "Copyright (C)  Joseph Artsimovich, 4lex4\0"
 				VALUE "OriginalFilename", "scantailor.exe\0"
-				VALUE "ProductName", "ScanTailor\0"
+				VALUE "ProductName", "@APPLICATION_DISPLAY_NAME@\0"
 				VALUE "ProductVersion", "@VERSION@\0"
 			END
 		END

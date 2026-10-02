@@ -11,6 +11,7 @@
 #include <QTextDocument>
 
 #include "AbstractFilter.h"
+#include "Diagnostics.h"
 #include "Dpm.h"
 #include "ErrorWidget.h"
 #include "FilterData.h"
@@ -55,6 +56,7 @@ LoadFileTask::LoadFileTask(Type type,
 LoadFileTask::~LoadFileTask() = default;
 
 FilterResultPtr LoadFileTask::operator()() {
+  DIAG_SCOPE(diagScope, "task.load_file");
   QImage image = ImageLoader::load(m_imageId);
 
   try {

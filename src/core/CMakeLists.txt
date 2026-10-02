@@ -14,8 +14,12 @@ set(common_sources
     ImageInfo.cpp ImageInfo.h
     ImageFileInfo.cpp ImageFileInfo.h
     ImageMetadata.cpp ImageMetadata.h
-    RecentProjects.cpp RecentProjects.h
     OutOfMemoryHandler.cpp OutOfMemoryHandler.h
+    CrashHandler.cpp CrashHandler.h
+    Diagnostics.cpp Diagnostics.h
+    ProjectRecovery.cpp ProjectRecovery.h
+    AppUpdate.cpp AppUpdate.h
+    ProjectHistory.cpp ProjectHistory.h
     PageSelectionAccessor.cpp PageSelectionAccessor.h
     PageSelectionProvider.h
     ContentSpanFinder.cpp ContentSpanFinder.h
@@ -123,7 +127,15 @@ target_link_libraries(
     PRIVATE TIFF::TIFF PNG::PNG ZLIB::ZLIB JPEG::JPEG
     PUBLIC Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Xml Qt5::Network Qt5::OpenGL Qt5::Svg
     imageproc zones
-    fix_orientation page_split deskew select_content page_layout output)
+    fix_orientation page_split deskew select_content page_layout output retouch)
+if (WIN32)
+  # dbghelp provides MiniDumpWriteDump, used by CrashHandler so that a crash
+  # leaves a usable report behind instead of the application simply vanishing,
+  # and the symbol lookup behind the stall stacks in Diagnostics. psapi provides
+  # the process memory counters Diagnostics samples. version reads the product
+  # version of an installer, which is how AppUpdate tells a newer one.
+  target_link_libraries(core PRIVATE dbghelp psapi version)
+endif()
 target_include_directories(core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 set_target_properties(core PROPERTIES AUTOUIC ON)
 
@@ -131,10 +143,13 @@ translation_sources(scantailor ${common_sources} ${common_ui_files})
 
 add_subdirectory(interaction)
 add_subdirectory(zones)
-add_subdirectory(tests)
+if (BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
 add_subdirectory(filters/fix_orientation)
 add_subdirectory(filters/page_split)
 add_subdirectory(filters/deskew)
 add_subdirectory(filters/select_content)
 add_subdirectory(filters/page_layout)
 add_subdirectory(filters/output)
+add_subdirectory(retouch)

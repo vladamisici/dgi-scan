@@ -10,6 +10,7 @@
 #include <QPainter>
 #include <QPointer>
 #include <boost/bind.hpp>
+#include <cmath>
 #include <utility>
 
 #include "BackgroundExecutor.h"

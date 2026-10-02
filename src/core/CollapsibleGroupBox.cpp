@@ -200,10 +200,23 @@ void CollapsibleGroupBox::saveState() {
 
   QSettings settings;
 
+  // Only what actually changed. Any write makes this QSettings rewrite the whole
+  // INI when it goes out of scope - a lock file, a flush to disk and a rename -
+  // and closing a project destroys every stage's option panels, and with them
+  // dozens of these boxes, one after another on the GUI thread. The diagnostics
+  // suite measured that at 350-620 ms per close on a local NVMe disk; with the
+  // profile on a server it is a network round trip per box. Unchanged, the
+  // QSettings only compares the file's size and date.
+  const auto store = [&settings](const QString& settingKey, const bool value) {
+    const QVariant stored = settings.value(settingKey);
+    if (stored.isNull() || (stored.toBool() != value)) {
+      settings.setValue(settingKey, value);
+    }
+  };
   if (isCheckable()) {
-    settings.setValue(key + "/checked", isChecked());
+    store(key + "/checked", isChecked());
   }
-  settings.setValue(key + "/collapsed", isCollapsed());
+  store(key + "/collapsed", isCollapsed());
 }
 
 QString CollapsibleGroupBox::getSettingsKey() const {

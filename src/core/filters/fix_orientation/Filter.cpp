@@ -125,6 +125,10 @@ void Filter::loadDefaultSettings(const PageInfo& pageInfo) {
   m_settings->applyRotation(pageInfo.id().imageId(), Utils::getDefaultOrthogonalRotation());
 }
 
+OrthogonalRotation Filter::rotationFor(const ImageId& imageId) const {
+  return m_settings->getRotationFor(imageId);
+}
+
 OptionsWidget* Filter::optionsWidget() {
   return m_optionsWidget.get();
 }

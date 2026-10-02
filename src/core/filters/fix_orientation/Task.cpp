@@ -7,6 +7,7 @@
 
 #include <utility>
 
+#include "Diagnostics.h"
 #include "Dpm.h"
 #include "Filter.h"
 #include "FilterUiInterface.h"
@@ -59,6 +60,11 @@ Task::~Task() = default;
 
 FilterResultPtr Task::process(const TaskStatus& status, FilterData data) {
   // This function is executed from the worker thread.
+  // Inclusive of the later stages, which are called from here; see diagnostics/SCHEMA.md.
+  DIAG_SCOPE(diagScope, "stage.fix_orientation");
+  // Always written, even at the basic level: a stage's own time is its duration
+  // minus the next stage's, so a missing record would be charged to the stage above.
+  diagScope.forceRecord();
   status.throwIfCancelled();
 
   updateFilterData(data);
@@ -93,7 +99,9 @@ Task::UiUpdater::UiUpdater(std::shared_ptr<Filter> filter,
                            const bool batchProcessing)
     : m_filter(std::move(filter)),
       m_image(image),
-      m_downscaledImage(ImageView::createDownscaledImage(image)),
+      // Only a page shown to the operator needs a display copy; in batch processing
+      // updateUI() returns before using it, so making one would be wasted work.
+      m_downscaledImage(batchProcessing ? QImage() : ImageView::createDownscaledImage(image)),
       m_imageId(imageId),
       m_xform(xform),
       m_batchProcessing(batchProcessing) {}

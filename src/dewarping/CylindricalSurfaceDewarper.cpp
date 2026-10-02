@@ -8,6 +8,7 @@
 
 #include "NumericTraits.h"
 #include "ToLineProjector.h"
+#include <cmath>
 
 /*
    Naming conventions:

@@ -6,6 +6,7 @@
 
 #include <QCoreApplication>
 #include <QImage>
+#include <QTransform>
 #include <memory>
 
 #include "AbstractFilter.h"
@@ -16,6 +17,7 @@
 #include "PictureZonePropFactory.h"
 #include "SafeDeletingQObjectPtr.h"
 
+class ImageId;
 class PageSelectionAccessor;
 class ThumbnailPixmapCache;
 class OutputFileNameGenerator;
@@ -49,6 +51,32 @@ class Filter : public AbstractFilter {
   void loadSettings(const ProjectReader& reader, const QDomElement& filtersEl) override;
 
   void loadDefaultSettings(const PageInfo& pageInfo) override;
+
+  /**
+   * \brief Makes every page cut from \p imageId produce its output afresh.
+   *
+   * For when the image file itself has been changed. The output is otherwise
+   * regenerated only when the file's size changes, and painting over part of
+   * an uncompressed scan leaves the size exactly as it was.
+   */
+  void invalidateOutputFor(const ImageId& imageId);
+
+  /**
+   * \brief How the page's output on screen was made from its image.
+   *
+   * \param toOutput From the image's pixels to the output's: rotation, skew,
+   *        crop and resolution, all of it.
+   * \param dewarped Whether the output was dewarped too, which \p toOutput
+   *        does not describe.
+   * \return false if the page's output has not been made in this session.
+   */
+  bool outputGeometry(const PageId& pageId, QTransform* toOutput, bool* dewarped) const;
+
+  /** \brief Whether the page's output has retouching painted over it, kept with the project. */
+  bool hasRetouch(const PageId& pageId) const;
+
+  /** \brief Removes that retouching; the output is made again without it. */
+  void clearRetouch(const PageId& pageId);
 
   std::shared_ptr<Task> createTask(const PageId& pageId,
                                    std::shared_ptr<ThumbnailPixmapCache> thumbnailCache,

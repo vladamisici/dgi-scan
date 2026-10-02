@@ -66,6 +66,18 @@
     <file>icons/six-spoked-asterisk-disabled.svg</file>
     <file>icons/diminishing-glass.svg</file>
     <file>icons/magnifying-glass.svg</file>
+    <file>icons/retouch-rect.svg</file>
+    <file>icons/retouch-brush.svg</file>
+    <file>icons/retouch-select.svg</file>
+    <file>icons/retouch-picker.svg</file>
+    <file>icons/retouch-redo.svg</file>
+    <file>icons/retouch-save.svg</file>
+    <file>icons/retouch-close.svg</file>
+    <file>icons/retouch-restore.svg</file>
+    <file>icons/retouch-fill.svg</file>
+    <file>icons/panel-collapse.svg</file>
+    <file>icons/panel-expand.svg</file>
+    <file>icons/compare.svg</file>
     <file>icons.xml</file>
     <file>font-icons.xml</file>
     <file>GPLv3.html</file>

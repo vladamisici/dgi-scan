@@ -9,19 +9,124 @@
 #include <cmath>
 
 #include "ApplicationSettings.h"
+#include "Diagnostics.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
 #else
+#include <cerrno>
+#include <cstring>
 #include <stdio.h>
 #endif
 
 namespace core {
-bool Utils::overwritingRename(const QString& from, const QString& to) {
+bool Utils::overwritingRename(const QString& from,
+                              const QString& to,
+                              QString* errorMessage,
+                              const RenameRetry retry) {
+  DIAG_SCOPE(diagScope, "file.rename");
+  // Only ever called once the error code has been read: building attributes
+  // allocates, and that can reset the thread's last-error value.
+  const auto finish = [&diagScope](const int tries, const int slept, const qint64 code, const bool ok) {
+    diagScope.attr(core::diag::Attr("attempts", tries));
+    diagScope.attr(core::diag::Attr("slept_ms", slept));
+    diagScope.attr(core::diag::Attr("error", code));
+    diagScope.attr(core::diag::Attr("ok", ok));
+    return ok;
+  };
 #ifdef Q_OS_WIN
-  return MoveFileExW((WCHAR*) from.utf16(), (WCHAR*) to.utf16(), MOVEFILE_REPLACE_EXISTING) != 0;
+  // Retried briefly, for a RenameRetry::Retry caller. A virus scanner, the search
+  // indexer or a backup agent that holds either file open for a moment without
+  // sharing delete access makes the replace fail transiently, and giving up on
+  // the first attempt would turn a momentary lock into a lost save.
+  //
+  // The retries sleep on the calling thread, so they are not for free and not
+  // for everyone: a RenameRetry::Once caller is writing something it can simply
+  // produce again, and would be paying up to half a second of the GUI thread - or
+  // of a worker - per file to save something disposable.
+  static const int delaysMs[] = {0, 30, 60, 120, 240};
+  const int attempts = (retry == RenameRetry::Retry) ? static_cast<int>(sizeof(delaysMs) / sizeof(delaysMs[0])) : 1;
+  unsigned long error = 0;
+  int attemptsMade = 0;
+  int sleptMs = 0;
+  for (int i = 0; i < attempts; ++i) {
+    const int delay = delaysMs[i];
+    if (delay > 0) {
+      ::Sleep(delay);
+      sleptMs += delay;
+    }
+    ++attemptsMade;
+    if (MoveFileExW((WCHAR*) from.utf16(), (WCHAR*) to.utf16(), MOVEFILE_REPLACE_EXISTING) != 0) {
+      if (errorMessage) {
+        errorMessage->clear();
+      }
+      // The error of the last failed attempt, if any: after a retried success it
+      // says what the retries were waiting out.
+      return finish(attemptsMade, sleptMs, static_cast<qint64>(error), true);
+    }
+    // Read immediately, before anything else can reset it. Building the message
+    // here instead would be a bug: Qt's translation and string formatting can
+    // clear the thread's last-error value.
+    error = ::GetLastError();
+    if ((error != ERROR_SHARING_VIOLATION) && (error != ERROR_LOCK_VIOLATION) && (error != ERROR_ACCESS_DENIED)) {
+      break;
+    }
+  }
+  if (errorMessage) {
+    *errorMessage = systemErrorString(error);
+  }
+  return finish(attemptsMade, sleptMs, static_cast<qint64>(error), false);
 #else
-  return rename(QFile::encodeName(from).data(), QFile::encodeName(to).data()) == 0;
+  // rename(2) is atomic and does not fail for a concurrent reader, so there is
+  // nothing here that retrying would help with.
+  (void) retry;
+  if (rename(QFile::encodeName(from).data(), QFile::encodeName(to).data()) == 0) {
+    if (errorMessage) {
+      errorMessage->clear();
+    }
+    return finish(1, 0, 0, true);
+  }
+  const int error = errno;
+  if (errorMessage) {
+    *errorMessage = systemErrorString(static_cast<unsigned long>(error));
+  }
+  return finish(1, 0, error, false);
+#endif
+}
+
+QString Utils::lastSystemErrorString() {
+#ifdef Q_OS_WIN
+  return systemErrorString(::GetLastError());
+#else
+  return systemErrorString(static_cast<unsigned long>(errno));
+#endif
+}
+
+QString Utils::systemErrorString(const unsigned long code) {
+#ifdef Q_OS_WIN
+  const DWORD error = static_cast<DWORD>(code);
+  if (error == ERROR_SUCCESS) {
+    return QString();
+  }
+  wchar_t* buffer = nullptr;
+  const DWORD length = ::FormatMessageW(
+      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, error,
+      MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), reinterpret_cast<wchar_t*>(&buffer), 0, nullptr);
+  QString message;
+  if (length && buffer) {
+    message = QString::fromWCharArray(buffer, static_cast<int>(length)).trimmed();
+  }
+  if (buffer) {
+    ::LocalFree(buffer);
+  }
+  return message.isEmpty() ? QString::fromLatin1("error %1").arg(error)
+                           : QString::fromLatin1("%1 [%2]").arg(message).arg(error);
+#else
+  const int error = static_cast<int>(code);
+  if (error == 0) {
+    return QString();
+  }
+  return QString::fromLatin1("%1 [%2]").arg(QString::fromLocal8Bit(std::strerror(error))).arg(error);
 #endif
 }
 

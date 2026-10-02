@@ -22,6 +22,8 @@ DespeckleState::DespeckleState(const QImage& output,
   m_everythingBW = extractBW(m_everythingMixed);
 }
 
+DespeckleState::DespeckleState(const double level, const Dpi& dpi) : m_dpi(dpi), m_despeckleLevel(level) {}
+
 DespeckleVisualization DespeckleState::visualize() const {
   return DespeckleVisualization(m_everythingMixed, m_speckles, m_dpi);
 }

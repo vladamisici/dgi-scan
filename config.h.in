@@ -9,6 +9,9 @@
 #define PORTABLE_CONFIG_DIR "@PORTABLE_CONFIG_DIR@"
 #define ENABLE_DEBUG_FEATURES
 #define APPLICATION_NAME "@APPLICATION_NAME@"
+#define APPLICATION_DISPLAY_NAME "@APPLICATION_DISPLAY_NAME@"
 #define ORGANIZATION_NAME APPLICATION_NAME
+// N of the vX.Y.Z-dgi.N release this is; 0 when the build could not tell.
+#define DGI_BUILD @DGI_BUILD@
 
 #endif

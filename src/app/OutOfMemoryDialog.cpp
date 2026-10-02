@@ -4,12 +4,14 @@
 #include "OutOfMemoryDialog.h"
 
 #include <QFileDialog>
+#include <QLockFile>
 #include <QMessageBox>
 #include <QSettings>
 #include <utility>
 
 #include "ProjectWriter.h"
-#include "RecentProjects.h"
+#include "ProjectHistory.h"
+#include "ProjectRecovery.h"
 
 OutOfMemoryDialog::OutOfMemoryDialog(QWidget* parent) : QDialog(parent) {
   ui.setupUi(this);
@@ -69,24 +71,37 @@ void OutOfMemoryDialog::saveProjectAs() {
   }
 
   if (saveProjectWithFeedback(projectFile)) {
+    if (m_projectFile.isEmpty()) {
+      // The work of the unnamed session is now in a real project file. Left in
+      // place, its snapshot would make the next start report a crash and offer
+      // to restore work that was in fact saved.
+      if (std::unique_ptr<QLockFile> lock = core::ProjectRecovery::claimUnsavedSession()) {
+        core::ProjectRecovery::discardUnsavedSession();
+      }
+    }
     m_projectFile = projectFile;
     showSaveSuccessScreen();
 
     QSettings settings;
     settings.setValue("project/lastDir", QFileInfo(m_projectFile).absolutePath());
 
-    RecentProjects rp;
-    rp.read();
-    rp.setMostRecent(m_projectFile);
-    rp.write();
+    core::ProjectHistory history;
+    history.read();
+    history.touch(m_projectFile, m_pages ? m_pages->numImages() : 0, m_outFileNameGen.outDir());
+    history.write();
   }
 }  // OutOfMemoryDialog::saveProjectAs
 
 bool OutOfMemoryDialog::saveProjectWithFeedback(const QString& projectFile) {
   ProjectWriter writer(m_pages, m_selectedPage, m_outFileNameGen);
 
-  if (!writer.write(projectFile, m_stages->filters())) {
-    QMessageBox::warning(this, tr("Error"), tr("Error saving the project file!"));
+  QString error;
+  if (!writer.write(projectFile, m_stages->filters(), &error)) {
+    // This is the last chance to keep the operator's work, so it has to say what
+    // went wrong rather than leaving them to guess.
+    QMessageBox::warning(this, tr("Error"),
+                         error.isEmpty() ? tr("Error saving the project file!")
+                                         : tr("Error saving the project file!\n\n%1").arg(error));
     return false;
   }
   return true;

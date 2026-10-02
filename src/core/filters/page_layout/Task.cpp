@@ -5,6 +5,7 @@
 
 #include <utility>
 
+#include "Diagnostics.h"
 #include "Dpm.h"
 #include "Filter.h"
 #include "FilterData.h"
@@ -68,6 +69,10 @@ FilterResultPtr Task::process(const TaskStatus& status,
                               const FilterData& data,
                               const QRectF& pageRect,
                               const QRectF& contentRect) {
+  DIAG_SCOPE(diagScope, "stage.page_layout");
+  // Always written, even at the basic level: a stage's own time is its duration
+  // minus the next stage's, so a missing record would be charged to the stage above.
+  diagScope.forceRecord();
   status.throwIfCancelled();
 
   const QSizeF contentSizeMm(Utils::calcRectSizeMM(data.xform(), contentRect));
@@ -113,7 +118,9 @@ Task::UiUpdater::UiUpdater(std::shared_ptr<Filter> filter,
       m_settings(std::move(settings)),
       m_pageId(pageId),
       m_image(image),
-      m_downscaledImage(ImageView::createDownscaledImage(image)),
+      // Only a page shown to the operator needs a display copy; in batch processing
+      // updateUI() returns before using it, so making one would be wasted work.
+      m_downscaledImage(batch ? QImage() : ImageView::createDownscaledImage(image)),
       m_contentMask(contentMask),
       m_xform(xform),
       m_adaptedContentRect(adaptedContentRect),

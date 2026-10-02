@@ -4,6 +4,7 @@
 #include "Filter.h"
 
 #include <OrderByCompletenessProvider.h>
+#include <OutputLayer.h>
 
 #include <utility>
 
@@ -71,6 +72,11 @@ void Filter::writePageSettings(QDomDocument& doc, QDomElement& filterEl, const P
     pageEl.appendChild(outputParams->toXml(doc, "output-params"));
   }
 
+  const retouch::OutputLayer retouchLayer(m_settings->retouchForPage(pageId));
+  if (!retouchLayer.isEmpty()) {
+    pageEl.appendChild(retouchLayer.toXml(doc, "retouch"));
+  }
+
   filterEl.appendChild(pageEl);
 }
 
@@ -128,6 +134,11 @@ void Filter::loadSettings(const ProjectReader& reader, const QDomElement& filter
       const OutputParams outputParams(outputParamsEl);
       m_settings->setOutputParams(pageId, outputParams);
     }
+
+    const QDomElement retouchEl(el.namedItem("retouch").toElement());
+    if (!retouchEl.isNull()) {
+      m_settings->setRetouch(pageId, retouch::OutputLayer(retouchEl));
+    }
   }
 }  // Filter::loadSettings
 
@@ -146,6 +157,31 @@ std::shared_ptr<Task> Filter::createTask(const PageId& pageId,
 
 std::shared_ptr<CacheDrivenTask> Filter::createCacheDrivenTask(const OutputFileNameGenerator& outFileNameGen) {
   return std::make_shared<CacheDrivenTask>(m_settings, outFileNameGen);
+}
+
+void Filter::invalidateOutputFor(const ImageId& imageId) {
+  for (const PageId::SubPage subPage : {PageId::SINGLE_PAGE, PageId::LEFT_PAGE, PageId::RIGHT_PAGE}) {
+    m_settings->removeOutputParams(PageId(imageId, subPage));
+  }
+}
+
+bool Filter::outputGeometry(const PageId& pageId, QTransform* toOutput, bool* dewarped) const {
+  Settings::OutputGeometry geometry;
+  if (!m_settings->outputGeometry(pageId, &geometry)) {
+    return false;
+  }
+  *toOutput = geometry.originalToOutput;
+  *dewarped = geometry.dewarped;
+  return true;
+}
+
+bool Filter::hasRetouch(const PageId& pageId) const {
+  return !m_settings->retouchForPage(pageId).isEmpty();
+}
+
+void Filter::clearRetouch(const PageId& pageId) {
+  m_settings->setRetouch(pageId, retouch::OutputLayer());
+  m_settings->removeOutputParams(pageId);
 }
 
 void Filter::loadDefaultSettings(const PageInfo& pageInfo) {

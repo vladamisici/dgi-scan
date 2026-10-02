@@ -14,6 +14,7 @@
 
 #include "DebugImages.h"
 #include "VecNT.h"
+#include <cmath>
 
 using namespace imageproc;
 

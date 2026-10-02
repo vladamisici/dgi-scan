@@ -7,6 +7,7 @@
 
 #include "GrayImage.h"
 #include "SeedFillGeneric.h"
+#include <stdexcept>
 
 namespace imageproc {
 namespace {

@@ -9,6 +9,7 @@
 #include <QtXml/QDomDocument>
 
 #include "Application.h"
+#include "AtomicFileOverwriter.h"
 #include "DefaultParams.h"
 #include "version.h"
 
@@ -101,13 +102,25 @@ bool DefaultParamsProfileManager::writeProfile(const DefaultParams& params, cons
     dir.mkpath(".");
   }
 
-  QFile file(dir.absoluteFilePath(name + ".stp"));
-  if (file.open(QIODevice::WriteOnly)) {
-    QTextStream textStream(&file);
-    doc.save(textStream, 2);
-    return true;
+  // Same reasoning as ProjectWriter::write(): opening the destination directly
+  // truncates a working profile before anything replaces it, and returning true
+  // the moment open() succeeds reports success for writes that never happened.
+  AtomicFileOverwriter overwriter;
+  QIODevice* const device = overwriter.startWriting(dir.absoluteFilePath(name + ".stp"));
+  if (!device) {
+    return false;
   }
-  return false;
+
+  {
+    QTextStream textStream(device);
+    doc.save(textStream, 2);
+    textStream.flush();
+    if (textStream.status() != QTextStream::Ok) {
+      overwriter.abort();
+      return false;
+    }
+  }
+  return overwriter.commit();
 }
 
 std::unique_ptr<DefaultParams> DefaultParamsProfileManager::createDefaultProfile() const {

@@ -4,13 +4,13 @@
 #ifndef SCANTAILOR_CORE_ATOMICFILEOVERWRITER_H_
 #define SCANTAILOR_CORE_ATOMICFILEOVERWRITER_H_
 
+#include <QString>
 #include <memory>
 
 #include "NonCopyable.h"
 
-class QString;
+class QFile;
 class QIODevice;
-class QTemporaryFile;
 
 /**
  * \brief Overwrites files by writing to a temporary file and then replacing
@@ -43,20 +43,77 @@ class AtomicFileOverwriter {
   QIODevice* startWriting(const QString& filePath);
 
   /**
+   * \brief How hard to insist the bytes have reached the storage device.
+   */
+  enum class Durability {
+    /**
+     * Hand the data to the operating system and rename. What every version of
+     * this class did before durability was a choice, and the right answer for
+     * anything the application can simply rebuild.
+     */
+    Buffered,
+    /**
+     * Additionally ask the device to commit the data before the rename, and
+     * fail the save if it says it could not. For the operator's own work,
+     * where the cost of the barrier is worth paying once per save.
+     */
+    Durable
+  };
+
+  /**
    * \brief Replaces the target file with the temporary one.
    *
    * If replacing failed, false is returned and the temporary file
    * is removed.
+   *
+   * \param durability Whether to force a flush barrier before the rename, and
+   *        to retry a rename that a scanner or indexer is momentarily blocking.
+   *        Both cost real time - a barrier makes a slow disk commit its write
+   *        cache, and the retries sleep - which is worth it for the project
+   *        file and pure waste for a regenerable cache. Defaulted to Durable so
+   *        that a caller has to think before weakening the guarantee.
    */
-  bool commit();
+  bool commit(Durability durability = Durability::Durable);
 
   /**
    * \brief Removes the temporary file without touching the target one.
    */
   void abort();
 
+  /**
+   * \brief Why the last startWriting() or commit() failed.
+   *
+   * Empty when nothing has failed. This exists because "Error saving the
+   * project file!" on its own is not something support can act on: what
+   * matters is which step failed and what the operating system said about it -
+   * most usefully whether the directory refused to accept a new file, which is
+   * a permission that overwriting an existing file in place never needed.
+   */
+  const QString& errorString() const { return m_errorString; }
+
+  /**
+   * \brief Which step failed.
+   *
+   * The distinction matters to callers deciding whether to retry by writing
+   * over the target directly. After Create or Replace the target is untouched
+   * and such a retry is reasonable. After Write it is not: the data could not
+   * be written once already, and truncating the target to try again risks
+   * destroying a good file to produce a broken one.
+   */
+  enum class FailureStage {
+    None,     /**< Nothing has failed. */
+    Create,   /**< The temporary file could not be created. */
+    Write,    /**< The data could not be written or flushed. */
+    Replace   /**< The data is written, but the target could not be replaced. */
+  };
+
+  FailureStage failureStage() const { return m_failureStage; }
+
  private:
-  std::unique_ptr<QTemporaryFile> m_tempFile;
+  std::unique_ptr<QFile> m_tempFile;
+  QString m_targetPath;
+  QString m_errorString;
+  FailureStage m_failureStage = FailureStage::None;
 };
 
 

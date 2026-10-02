@@ -10,6 +10,7 @@
 
 #include "ContentBoxFinder.h"
 #include "DebugImagesImpl.h"
+#include "Diagnostics.h"
 #include "Dpm.h"
 #include "Filter.h"
 #include "FilterData.h"
@@ -70,6 +71,10 @@ Task::Task(std::shared_ptr<Filter> filter,
 Task::~Task() = default;
 
 FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data) {
+  DIAG_SCOPE(diagScope, "stage.select_content");
+  // Always written, even at the basic level: a stage's own time is its duration
+  // minus the next stage's, so a missing record would be charged to the stage above.
+  diagScope.forceRecord();
   status.throwIfCancelled();
 
   std::unique_ptr<Params> params(m_settings->getPageParams(m_pageId));
@@ -129,6 +134,25 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data) 
     }
   }
 
+  // The image's pixels changed - a stamp painted out - so the content is found
+  // again in what is left, whatever the mode: a box found once and frozen, or
+  // drawn by hand, still has the stamp in it. The mode is kept, so the new box
+  // stays frozen or manual in turn - rather than becoming the whole page that
+  // "disabled" would make of it.
+  const bool redetect = m_settings->isRedetectionRequested(m_pageId);
+  if (redetect) {
+    const QRectF pageRect(newParams.pageRect());
+    QRectF contentRect(ContentBoxFinder::findContentBox(status, data, pageRect, m_dbg.get()));
+    if (contentRect.isValid()) {
+      contentRect &= pageRect;
+    } else if (newParams.contentDetectionMode() == MODE_DISABLED) {
+      // Nothing left on it: what that mode gives a page.
+      contentRect = pageRect;
+    }
+    newParams.setContentRect(contentRect);
+    newParams.setContentSizeMM(physSizeCalc.sizeMM(contentRect));
+  }
+
   OptionsWidget::UiData uiData;
   uiData.setSizeCalc(physSizeCalc);
   uiData.setContentRect(newParams.contentRect());
@@ -139,6 +163,9 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data) 
   uiData.setFineTuneCornersEnabled(newParams.isFineTuningEnabled());
 
   m_settings->setPageParams(m_pageId, newParams);
+  if (redetect) {
+    m_settings->clearRedetection(m_pageId);
+  }
 
   status.throwIfCancelled();
 
@@ -165,7 +192,9 @@ Task::UiUpdater::UiUpdater(std::shared_ptr<Filter> filter,
       m_pageId(pageId),
       m_dbg(std::move(dbg)),
       m_image(image),
-      m_downscaledImage(ImageView::createDownscaledImage(image)),
+      // Only a page shown to the operator needs a display copy; in batch processing
+      // updateUI() returns before using it, so making one would be wasted work.
+      m_downscaledImage(batch ? QImage() : ImageView::createDownscaledImage(image)),
       m_contentMask(contentMask),
       m_xform(xform),
       m_uiData(uiData),

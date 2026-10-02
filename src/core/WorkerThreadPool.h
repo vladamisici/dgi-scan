@@ -6,6 +6,7 @@
 
 #include <QObject>
 #include <QSettings>
+#include <atomic>
 #include <memory>
 
 #include "BackgroundTask.h"
@@ -28,6 +29,15 @@ class WorkerThreadPool : public QObject {
    */
   void shutdown();
 
+  /**
+   * \brief Whether every worker has finished.
+   *
+   * Lets the GUI thread find out that outstanding tasks are done without
+   * waiting for them. shutdown() answers the same question by blocking, which
+   * is only acceptable while the application is already on its way out.
+   */
+  bool isIdle() const;
+
   bool hasSpareCapacity() const;
 
   void submitTask(const BackgroundTaskPtr& task);
@@ -45,6 +55,8 @@ class WorkerThreadPool : public QObject {
 
   QThreadPool* m_pool;
   QSettings m_settings;
+  // "settings/worker_thread_priority" = "low" runs page processing below the GUI thread's priority.
+  std::atomic<bool> m_lowPriority{false};
 };
 
 

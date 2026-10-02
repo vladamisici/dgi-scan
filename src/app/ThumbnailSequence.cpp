@@ -22,9 +22,11 @@
 #include <boost/multi_index/mem_fun.hpp>
 #include <boost/multi_index/sequenced_index.hpp>
 #include <boost/multi_index_container.hpp>
+#include <cmath>
 #include <memory>
 
 #include "ColorSchemeManager.h"
+#include "Diagnostics.h"
 #include "IncompleteThumbnail.h"
 #include "PageSequence.h"
 #include "ThumbnailFactory.h"
@@ -460,6 +462,8 @@ void ThumbnailSequence::Impl::attachView(QGraphicsView* const view) {
 void ThumbnailSequence::Impl::reset(const PageSequence& pages,
                                     const SelectionAction selectionAction,
                                     std::shared_ptr<const PageOrderProvider> orderProvider) {
+  DIAG_SCOPE(diagScope, "thumbs.sequence.reset");
+  diagScope.attr(::core::diag::Attr("pages", static_cast<qint64>(pages.numPages())));
   m_orderProvider = std::move(orderProvider);
 
   std::set<PageId> selected;
@@ -484,6 +488,15 @@ void ThumbnailSequence::Impl::reset(const PageSequence& pages,
     m_itemsInOrder.push_back(Item(pageInfo, composite.release()));
     const Item* item = &m_itemsInOrder.back();
     item->composite->setItem(item);
+
+    // Finish the item here rather than leaving it to invalidateAllThumbnails().
+    // That call used to immediately build a second CompositeItem for every page
+    // and delete the one just created - doubling the work of loading a project
+    // and, because building a thumbnail item stats its file, doubling the
+    // per-page round trips to what is often a network share.
+    item->incompleteThumbnail = item->composite->incompleteThumbnail();
+    item->composite->updateAppearence(item->isSelected(), item->isSelectionLeader());
+    m_graphicsScene.addItem(item->composite);
 
     const ImageId& imageId = pageInfo.id().imageId();
 
@@ -512,7 +525,10 @@ void ThumbnailSequence::Impl::reset(const PageSequence& pages,
     }
   }
 
-  invalidateAllThumbnails();
+  // The composites are already built, scened and styled by the loop above; all
+  // that is left is what invalidateAllThumbnails() does after rebuilding them.
+  orderItems();
+  updateSceneItemsPos();
 
   if (!m_selectionLeader) {
     if (someSelectedItem) {
@@ -636,7 +652,11 @@ void ThumbnailSequence::Impl::invalidateThumbnailImpl(const ItemsById::iterator 
   CompositeItem* const oldComposite = idIt->composite;
   const QSizeF oldSize(oldComposite->boundingRect().size());
   const QSizeF newSize(newComposite->boundingRect().size());
-  const QPointF oldPos(newComposite->pos());
+  // The OLD item's position - this read newComposite, which has only just been
+  // created and so always sits at the origin. The comparison at the end of this
+  // function was therefore almost always true, emitting a selection-leader
+  // signal on every single thumbnail invalidation.
+  const QPointF oldPos(oldComposite->pos());
 
   idIt->composite = newComposite;
   idIt->incompleteThumbnail = newComposite->incompleteThumbnail();
@@ -666,6 +686,7 @@ void ThumbnailSequence::Impl::invalidateThumbnailImpl(const ItemsById::iterator 
 }  // ThumbnailSequence::Impl::invalidateThumbnailImpl
 
 void ThumbnailSequence::Impl::invalidateAllThumbnails() {
+  DIAG_SCOPE(diagScope, "thumbs.invalidate_all");
   // Recreate thumbnails now, whether a thumbnail is incomplete
   // is taken into account when sorting.
   ItemsInOrder::iterator ordIt(m_itemsInOrder.begin());

@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "CompositeCacheDrivenTask.h"
+#include "Diagnostics.h"
 #include "OrthogonalRotation.h"
 #include "PageOrientationCollector.h"
 #include "PageSequence.h"
@@ -30,6 +31,7 @@ PageOrientationPropagator::PageOrientationPropagator(std::shared_ptr<page_split:
 PageOrientationPropagator::~PageOrientationPropagator() = default;
 
 void PageOrientationPropagator::propagate(const ProjectPages& pages) {
+  DIAG_SCOPE(diagScope, "propagate.page_orientation");
   const PageSequence sequence(pages.toPageSequence(PAGE_VIEW));
 
   for (const PageInfo& pageInfo : sequence) {

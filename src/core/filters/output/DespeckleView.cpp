@@ -94,6 +94,8 @@ DespeckleView::DespeckleView(const DespeckleState& despeckleState,
   if (!visualization.isNull()) {
     // Create the image view.
     auto widget = std::make_unique<BasicImageView>(visualization.image(), visualization.downscaledImage());
+    // The specks are a few pixels across: a reduced copy would blur them away.
+    widget->renderFromFullResolution();
     setCurrentIndex(addWidget(widget.release()));
     emit imageViewCreated(dynamic_cast<ImageViewBase*>(widget.get()));
   }
@@ -162,8 +164,11 @@ void DespeckleView::despeckleDone(const DespeckleState& despeckleState,
 
   removeImageViewWidget();
 
-  std::unique_ptr<QWidget> widget
+  auto imageView
       = std::make_unique<BasicImageView>(visualization.image(), visualization.downscaledImage(), OutputMargins());
+  // The specks are a few pixels across: a reduced copy would blur them away.
+  imageView->renderFromFullResolution();
+  std::unique_ptr<QWidget> widget = std::move(imageView);
 
   if (dbg && !dbg->empty()) {
     auto tabWidget = std::make_unique<TabbedDebugImages>();

@@ -5,6 +5,7 @@
 
 #include "FrenetFrame.h"
 #include "MatrixCalc.h"
+#include <cmath>
 
 namespace spfit {
 SqDistApproximant::SqDistApproximant(const Vec2d& origin, const Vec2d& u, const Vec2d& v, double m, double n) {

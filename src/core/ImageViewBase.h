@@ -59,7 +59,8 @@ class ImageViewBase : public QAbstractScrollArea {
    *        The whole idea of having a downscaled version is
    *        to speed up real-time rendering of high-resolution
    *        images.  Note that the delayed high quality transform
-   *        operates on the original image, not the downscaled one.
+   *        operates on the original image, not the downscaled one -
+   *        unless low-resolution display is on (see setLowResDisplay()).
    * \param presentation Specifies transformation from image
    *        pixel coordinates to virtual image coordinates, along
    *        with some other properties.
@@ -98,6 +99,38 @@ class ImageViewBase : public QAbstractScrollArea {
    * \return The image downscaled by an unspecified degree.
    */
   static QImage createDownscaledImage(const QImage& image);
+
+  /**
+   * \brief Shows pages from a reduced-resolution copy, to make display faster.
+   *
+   * With it on, downscaled images are made at 150 dpi instead of 200 and are
+   * capped in size, and - the larger gain - the delayed high-quality version
+   * is rendered from that copy instead of the full-resolution image: a ninth
+   * or less of the pixels to process on every page, zoom and scroll. At the
+   * zoom that fits a page to the window, screens show less than that anyway;
+   * zoomed in, pages get softer but stay readable.
+   *
+   * Display only. Every view keeps the full-resolution image as the basis of
+   * its coordinates, so what the operator edits - content boxes, split lines,
+   * margins, zones, dewarping curves - is unchanged, and processing and output
+   * never go through here.
+   *
+   * Read by views as they are created and by createDownscaledImage(), which
+   * runs on worker threads - hence a plain atomic rather than the settings.
+   */
+  static void setLowResDisplay(bool enabled);
+
+  static bool lowResDisplay();
+
+  /**
+   * \brief Renders this view's sharp version from the full-resolution image,
+   *        whatever setLowResDisplay() says.
+   *
+   * For the views whose whole point is fine detail - the despeckling preview,
+   * where the specks are a few pixels across - and which a reduced copy would
+   * blur into nothing.
+   */
+  void renderFromFullResolution();
 
   InteractionHandler& rootInteractionHandler() { return m_rootInteractionHandler; }
 
@@ -361,6 +394,26 @@ class ImageViewBase : public QAbstractScrollArea {
    * Transformation from m_pixmap coordinates to m_image coordinates.
    */
   QTransform m_pixmapToImage;
+
+  /**
+   * What the high-quality version is rendered from: m_image, or with
+   * low-resolution display on, the downscaled copy. m_image stays the basis of
+   * every coordinate either way.
+   */
+  QImage m_hqSource;
+
+  /**
+   * Transformation from m_hqSource coordinates to m_image coordinates:
+   * identity unless m_hqSource is the downscaled copy.
+   */
+  QTransform m_hqSourceToImage;
+
+  /**
+   * The minimum source area averaged for one screen pixel. Zero keeps the
+   * full-resolution image sharp; a reduced copy, which zooming in enlarges,
+   * gets one source pixel so it is interpolated rather than blocky.
+   */
+  QSizeF m_hqMinMappingArea;
 
   /**
    * The area of the virtual image to be displayed.

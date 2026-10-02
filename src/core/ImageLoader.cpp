@@ -7,6 +7,7 @@
 #include <QImage>
 #include <QtGui/QImageReader>
 
+#include "Diagnostics.h"
 #include "ImageId.h"
 #include "TiffReader.h"
 
@@ -23,16 +24,28 @@ QImage ImageLoader::load(const QString& filePath, const int pageNum) {
 }
 
 QImage ImageLoader::load(QIODevice& ioDev, const int pageNum) {
+  // Timed here rather than in the path overloads, because the output stage's
+  // cached-result loads come straight to this one with a file they opened.
+  DIAG_SCOPE(diagScope, "image.load");
+  // The size goes with the time: decoding cost scales with pixels, so a slow
+  // load of a huge scan and a slow load of a small one point at different causes.
+  const auto finish = [&diagScope](QImage loaded) {
+    diagScope.attr(core::diag::Attr("w", loaded.width()));
+    diagScope.attr(core::diag::Attr("h", loaded.height()));
+    diagScope.attr(core::diag::Attr("mb", loaded.sizeInBytes() / 1048576.0));
+    return loaded;
+  };
+
   if (TiffReader::canRead(ioDev)) {
-    return TiffReader::readImage(ioDev, pageNum);
+    return finish(TiffReader::readImage(ioDev, pageNum));
   }
 
   if (pageNum != 0) {
     // Qt can only load the first page of multi-page images.
-    return QImage();
+    return finish(QImage());
   }
 
   QImage image;
   QImageReader(&ioDev).read(&image);
-  return image;
+  return finish(image);
 }

@@ -8,6 +8,7 @@
 
 #include "../../Utils.h"
 #include "DespeckleView.h"
+#include <cmath>
 
 using namespace core;
 

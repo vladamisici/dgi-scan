@@ -8,6 +8,7 @@
 #include <QTransform>
 
 #include "CylindricalSurfaceDewarper.h"
+#include <cmath>
 
 namespace dewarping {
 DistortionModel::DistortionModel() = default;

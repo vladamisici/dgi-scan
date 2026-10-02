@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>337</width>
-    <height>442</height>
+    <height>465</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -44,6 +44,16 @@
            <widget class="QLabel" name="openglDeviceLabel">
             <property name="text">
              <string>Device: %1</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QCheckBox" name="lowResDisplayCB">
+            <property name="toolTip">
+             <string>Pages are shown from a reduced-resolution copy, so they load and redraw faster. Zoomed in they are softer, but readable. Processing, batch results and output files keep the full resolution. Also toggled with F6.</string>
+            </property>
+            <property name="text">
+             <string>Low-resolution page display (faster)</string>
             </property>
            </widget>
           </item>

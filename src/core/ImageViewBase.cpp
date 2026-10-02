@@ -20,6 +20,7 @@
 #include "ApplicationSettings.h"
 #include "BackgroundExecutor.h"
 #include "ColorSchemeManager.h"
+#include "Diagnostics.h"
 #include "Dpm.h"
 #include "ImagePresentation.h"
 #include "OpenGLSupport.h"
@@ -27,6 +28,9 @@
 #include "ScopedIncDec.h"
 #include "UnitsProvider.h"
 #include "Utils.h"
+#include <algorithm>
+#include <atomic>
+#include <cmath>
 
 using namespace core;
 using namespace imageproc;
@@ -35,7 +39,11 @@ class ImageViewBase::HqTransformTask : public AbstractCommand<std::shared_ptr<Ab
   DECLARE_NON_COPYABLE(HqTransformTask)
 
  public:
-  HqTransformTask(ImageViewBase* imageView, const QImage& image, const QTransform& xform, const QSize& targetSize);
+  HqTransformTask(ImageViewBase* imageView,
+                  const QImage& image,
+                  const QTransform& xform,
+                  const QSize& targetSize,
+                  const QSizeF& minMappingArea);
 
   void cancel() { m_result->cancel(); }
 
@@ -68,6 +76,7 @@ class ImageViewBase::HqTransformTask : public AbstractCommand<std::shared_ptr<Ab
   QImage m_image;
   QTransform m_xform;
   QSize m_targetSize;
+  QSizeF m_minMappingArea;
 };
 
 
@@ -131,6 +140,7 @@ ImageViewBase::ImageViewBase(const QImage& image,
       m_ignoreResizeEvents(0),
       m_hqTransformEnabled(true),
       m_infoProvider(Dpm(m_image)) {
+  DIAG_COUNT("ui.image_view.ctor");
   /* For some reason, the default viewport fills background with
    * a color different from QPalette::Window at the first show on Windows.
    * Here we make it not fill it automatically at all
@@ -166,15 +176,29 @@ ImageViewBase::ImageViewBase(const QImage& image,
   setFrameShape(QFrame::NoFrame);
   viewport()->setFocusPolicy(Qt::WheelFocus);
 
+  QImage downscaledImage;
   if (downscaledVersion.isNull()) {
-    m_pixmap = QPixmap::fromImage(createDownscaledImage(image));
+    downscaledImage = createDownscaledImage(image);
+    m_pixmap = QPixmap::fromImage(downscaledImage);
   } else if (downscaledVersion.pixmap().isNull()) {
-    m_pixmap = QPixmap::fromImage(downscaledVersion.image());
+    downscaledImage = downscaledVersion.image();
+    m_pixmap = QPixmap::fromImage(downscaledImage);
   } else {
     m_pixmap = downscaledVersion.pixmap();
   }
 
   m_pixmapToImage.scale((double) m_image.width() / m_pixmap.width(), (double) m_image.height() / m_pixmap.height());
+
+  m_hqSource = m_image;
+  m_hqMinMappingArea = QSizeF(0.0, 0.0);
+  if (lowResDisplay() && (m_pixmap.size() != m_image.size())) {
+    // A pixmap shared between views arrives without its image. On the raster
+    // backend toImage() shares the pixmap's buffer rather than copying it.
+    m_hqSource = downscaledImage.isNull() ? m_pixmap.toImage() : downscaledImage;
+    m_hqSourceToImage = QTransform::fromScale((double) m_image.width() / m_hqSource.width(),
+                                              (double) m_image.height() / m_hqSource.height());
+    m_hqMinMappingArea = QSizeF(1.0, 1.0);
+  }
 
   m_widgetFocalPoint = centeredWidgetFocalPoint();
   m_pixmapFocalPoint = m_virtualToImage.map(virtualDisplayRect().center());
@@ -228,12 +252,46 @@ void ImageViewBase::hqTransformSetEnabled(const bool enabled) {
   }
 }
 
+namespace {
+std::atomic<bool> g_lowResDisplay{false};
+
+// The longest side of a low-resolution display copy, in pixels. Also what keeps
+// an image with a missing or wrong DPI - which Qt reports as 96 - from being
+// shown at full size. At 150 dpi an A4 page is 1754 px tall and a 600 dpi
+// two-page spread 1948 px wide, so ordinary pages are not affected by it.
+const int LOW_RES_MAX_SIDE = 2400;
+}  // namespace
+
+void ImageViewBase::setLowResDisplay(const bool enabled) {
+  g_lowResDisplay.store(enabled, std::memory_order_relaxed);
+}
+
+bool ImageViewBase::lowResDisplay() {
+  return g_lowResDisplay.load(std::memory_order_relaxed);
+}
+
+void ImageViewBase::renderFromFullResolution() {
+  m_hqSource = m_image;
+  m_hqSourceToImage.reset();
+  m_hqMinMappingArea = QSizeF(0.0, 0.0);
+  // Anything already rendered or queued came from the other source.
+  m_hqPixmap = QPixmap();
+  if (m_hqTransformTask) {
+    m_hqTransformTask->cancel();
+    m_hqTransformTask.reset();
+  }
+  update();
+}
+
 QImage ImageViewBase::createDownscaledImage(const QImage& image) {
   assert(!image.isNull());
+  DIAG_COUNT("ui.downscale");
+
+  const bool lowRes = lowResDisplay();
 
   // Original and downscaled DPM.
   const Dpm oDpm(image);
-  const Dpm dDpm(Dpi(200, 200));
+  const Dpm dDpm(lowRes ? Dpi(150, 150) : Dpi(200, 200));
 
   const int oW = image.width();
   const int oH = image.height();
@@ -242,6 +300,12 @@ QImage ImageViewBase::createDownscaledImage(const QImage& image) {
   int dH = oH * dDpm.vertical() / oDpm.vertical();
   dW = qBound(1, dW, oW);
   dH = qBound(1, dH, oH);
+
+  if (lowRes && (std::max(dW, dH) > LOW_RES_MAX_SIDE)) {
+    const double factor = (double) LOW_RES_MAX_SIDE / std::max(dW, dH);
+    dW = std::max(1, qRound(dW * factor));
+    dH = std::max(1, qRound(dH * factor));
+  }
 
   if ((dW * 1.2 > oW) || (dH * 1.2 > oH)) {
     // Sizes are close - no point in downscaling.
@@ -393,6 +457,9 @@ void ImageViewBase::ensureStatusTip(const QString& statusTip) {
 }
 
 void ImageViewBase::paintEvent(QPaintEvent* event) {
+  // Before the painter, so that its destructor - where the drawing is actually
+  // flushed to the device - is counted too.
+  DIAG_COUNT("ui.paint.image_view");
   QPainter painter(viewport());
 
   // Fill the background as Qt::WA_OpaquePaintEvent attribute is enabled.
@@ -897,7 +964,7 @@ bool ImageViewBase::validateHqPixmap() const {
     return false;
   }
 
-  if (m_hqSourceId != m_image.cacheKey()) {
+  if (m_hqSourceId != m_hqSource.cacheKey()) {
     return false;
   }
 
@@ -932,14 +999,17 @@ void ImageViewBase::initiateBuildingHqVersion() {
     m_hqTransformTask.reset();
   }
 
+  // m_hqXform stays image-to-widget whatever the source, because that is what
+  // validateHqPixmap() compares against.
   const QTransform xform(m_imageToVirtual * m_virtualToWidget);
-  const auto task = std::make_shared<HqTransformTask>(this, m_image, xform, viewport()->size());
+  const auto task = std::make_shared<HqTransformTask>(this, m_hqSource, m_hqSourceToImage * xform, viewport()->size(),
+                                                      m_hqMinMappingArea);
 
   backgroundExecutor().enqueueTask(task);
 
   m_hqTransformTask = task;
   m_hqXform = xform;
-  m_hqSourceId = m_image.cacheKey();
+  m_hqSourceId = m_hqSource.cacheKey();
 }
 
 /**
@@ -1004,18 +1074,25 @@ ImageViewInfoProvider& ImageViewBase::infoProvider() {
 ImageViewBase::HqTransformTask::HqTransformTask(ImageViewBase* imageView,
                                                 const QImage& image,
                                                 const QTransform& xform,
-                                                const QSize& targetSize)
-    : m_result(std::make_shared<Result>(imageView)), m_image(image), m_xform(xform), m_targetSize(targetSize) {}
+                                                const QSize& targetSize,
+                                                const QSizeF& minMappingArea)
+    : m_result(std::make_shared<Result>(imageView)),
+      m_image(image),
+      m_xform(xform),
+      m_targetSize(targetSize),
+      m_minMappingArea(minMappingArea) {}
 
 std::shared_ptr<AbstractCommand<void>> ImageViewBase::HqTransformTask::operator()() {
   if (isCancelled()) {
     return nullptr;
   }
+  DIAG_SCOPE(hqScope, "ui.hq_transform");
+  hqScope.attr(core::diag::Attr("src_mpx", (double) m_image.width() * m_image.height() / 1e6));
 
   const QRect targetRect(
       m_xform.map(QRectF(m_image.rect())).boundingRect().toRect().intersected(QRect(QPoint(0, 0), m_targetSize)));
 
-  QImage hqImage(transform(m_image, m_xform, targetRect, OutsidePixels::assumeWeakColor(Qt::white), QSizeF(0.0, 0.0)));
+  QImage hqImage(transform(m_image, m_xform, targetRect, OutsidePixels::assumeWeakColor(Qt::white), m_minMappingArea));
 
   // In many cases m_image and therefore hqImage are grayscale with
   // a palette, but given that hqImage will be converted to a QPixmap

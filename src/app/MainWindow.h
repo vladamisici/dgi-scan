@@ -5,10 +5,12 @@
 #define SCANTAILOR_APP_MAINWINDOW_H_
 
 #include <QMainWindow>
+#include <QHash>
 #include <QObjectCleanupHandler>
 #include <QPointer>
 #include <QSizeF>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <boost/function.hpp>
 #include <memory>
@@ -25,6 +27,7 @@
 #include "PageId.h"
 #include "PageRange.h"
 #include "PageView.h"
+#include "RetouchController.h"
 #include "SelectedPage.h"
 #include "StatusBarPanel.h"
 #include "ThumbnailSequence.h"
@@ -51,6 +54,8 @@ class ContentBoxPropagator;
 class PageOrientationPropagator;
 class ProjectCreationContext;
 class ProjectOpeningContext;
+class QSessionManager;
+class QLockFile;
 class CompositeCacheDrivenTask;
 class TabbedDebugImages;
 class ProcessingTaskQueue;
@@ -59,12 +64,23 @@ class OutOfMemoryDialog;
 class QLineF;
 class QRectF;
 class QLayout;
+class RetouchPanel;
+class VerificationView;
+class AppUpdater;
 
-class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::MainWindow {
+class MainWindow : public QMainWindow, private FilterUiInterface, private RetouchHost, private Ui::MainWindow {
   DECLARE_NON_COPYABLE(MainWindow)
 
   Q_OBJECT
+  // Drives the window through a scripted workload for the diagnostics suite
+  // (scantailor --stress). It needs the same internal entry points the menus
+  // and dialogs use, minus the dialogs.
+  friend class StressDriver;
+
  public:
+  /** \brief How an interactive page load ended. \see interactiveLoadFinished() */
+  enum LoadOutcome { LOAD_OK, LOAD_ERROR, LOAD_TASK_FAILED, LOAD_OUTPUT_NOT_READY };
+
   MainWindow();
 
   ~MainWindow() override;
@@ -74,6 +90,19 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   std::set<PageId> selectedPages() const;
 
   std::vector<PageRange> selectedRanges() const;
+
+ signals:
+  /**
+   * \brief The page shown for interaction has finished loading, or failed to.
+   *
+   * Emitted once per interactive load that was not superseded by another one,
+   * including when nothing could be loaded. Without it the only way to know a
+   * page is on screen is to poll widget state.
+   */
+  void interactiveLoadFinished(const PageId& pageId, int filterIdx, int outcome);
+
+  /** \brief Batch processing ended; \p completed is false if it was stopped early. */
+  void batchProcessingFinished(bool completed);
 
  protected:
   bool eventFilter(QObject* obj, QEvent* ev) override;
@@ -88,12 +117,31 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void openProject(const QString& projectFile);
 
+  void openRecentVerificationProject(const QString& projectFile, const QStringList& inputDirectories);
+
+  void loadProjectDocument(const QString& projectFile, const QString& documentPath);
+
+  /**
+   * \brief Offers back a never-saved project left behind by an interrupted run.
+   *
+   * Called from main() once startup is complete, so that it does not compete
+   * with a project named on the command line.
+   */
+  void offerUnsavedSessionRecovery();
+
+  /** \brief Starts looking for a newer installer, if this copy updates itself. \see AppUpdater */
+  void startUpdateChecks();
+
  private:
   enum MainAreaAction { UPDATE_MAIN_AREA, CLEAR_MAIN_AREA };
 
  private slots:
 
-  void autoSaveProject();
+  /** \return whether anything was written; m_lastAutoSaveBranch says which way it went. */
+  bool autoSaveProject();
+
+  /** \brief Saves a recovery snapshot when the desktop session ends. */
+  void commitData(QSessionManager& manager);
 
   void goFirstPage();
 
@@ -160,15 +208,20 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void fixedDpiSubmitted();
 
-  void saveProjectTriggered();
+  bool saveProjectTriggered();
 
-  void saveProjectAsTriggered();
+  bool saveProjectAsTriggered();
 
   void newProject();
 
   void newProjectCreated(ProjectCreationContext* context);
 
   void openProject();
+
+  /** \brief Opens a project picked from the start page's recent list. */
+  void openRecentProject(const QString& projectFile);
+
+  void startVerification();
 
   void projectOpened(ProjectOpeningContext* context);
 
@@ -190,6 +243,8 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   class PageSelectionProviderImpl;
 
   enum SavePromptResult { SAVE, DONT_SAVE, CANCEL };
+
+  enum RecoveryPromptResult { RECOVER, DISCARD_RECOVERY, CANCEL_RECOVERY };
 
   using FilterPtr = std::shared_ptr<AbstractFilter>;
 
@@ -215,7 +270,14 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void showNewOpenProjectPanel();
 
+  void openProjectWithCurrentMode(const QString& projectFile);
+
   SavePromptResult promptProjectSave();
+
+  /**
+   * \brief Asks what to do with a recovery snapshot left by an interrupted session.
+   */
+  RecoveryPromptResult promptProjectRecovery(const QString& projectFile);
 
   static bool compareFiles(const QString& fpath1, const QString& fpath2);
 
@@ -260,7 +322,23 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void closeProjectWithoutSaving();
 
+  void releaseUnsavedSession();
+
   bool saveProjectWithFeedback(const QString& projectFile);
+
+  /**
+   * \brief Writes the project without reporting failures to the user.
+   *
+   * For unattended saves, where a modal warning would interrupt the operator
+   * mid-edit. Failures go to the log instead.
+   */
+  /** \brief Submits the next batch tasks, or finishes the batch if none are left. */
+  void continueBatchProcessing();
+
+  bool writeProjectQuietly(const QString& projectFile);
+
+  /** \brief Writes the recovery snapshot, discarding it if it matches the saved project. */
+  bool writeRecoverySnapshot();
 
   void showInsertFileDialog(BeforeOrAfter beforeOrAfter, const ImageId& existig);
 
@@ -294,9 +372,112 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
 
   void updateAutoSaveTimer();
 
+  void applyLowResDisplay(bool enabled);
+
+  /**
+   * \brief Parks the objects a project switch is replacing until the workers let go.
+   *
+   * m_pages, m_stages and the thumbnail cache are shared with running background
+   * tasks. Simply reassigning them can leave a worker holding the last reference
+   * and therefore destroying them - QWidgets among them, since every filter owns
+   * its options widget - on a worker thread, which is undefined behaviour.
+   *
+   * The GUI thread keeps its own reference instead, so no worker can ever be the
+   * last owner, and drops it once the pool reports itself idle. This replaces
+   * blocking the GUI thread on the pool: that froze the window for as long as
+   * the page being processed took to notice it had been cancelled - seconds on a
+   * slower machine, and up to the fifteen-second cap - and still carried on
+   * regardless once the cap expired, so it never actually guaranteed what it
+   * cost so much to wait for.
+   */
+  void retireProjectObjects();
+
+  void releaseRetiredProjectObjects();
+
   PageSequence currentPageSequence();
 
   void setupIcons();
+
+  // RetouchHost
+  PageInfo retouchCurrentPage() const override;
+
+  bool retouchAllowed() const override;
+
+  bool retouchTarget(const PageInfo& page, RetouchTarget* target, QString* whyNot) const override;
+
+  QString retouchOutputDirectory() const override;
+
+  std::shared_ptr<ThumbnailPixmapCache> retouchThumbnailCache() const override;
+
+  void retouchShowEditor(QWidget* editor, const QString& title, bool output) override;
+
+  void retouchSessionEnded() override;
+
+  void retouchSourceReplaced(const ImageId& imageId) override;
+
+  ImageViewBase* retouchInputView(const ImageId& inputImage, double* sx, double* sy) const override;
+
+  bool retouchOutputHasEdits(const PageInfo& page) const override;
+
+  void retouchOutputRestore(const PageInfo& page) override;
+
+  /** \brief Puts the page being retouched back as the selected one, after the operator chose to keep editing. */
+  void keepRetouchedPageSelected();
+
+  ImageViewBase* retouchProjectView() const override;
+
+  /** \brief The side-by-side view on screen, if verification mode is showing one. */
+  VerificationView* currentVerificationView() const;
+
+  void setupRetouch();
+
+  QStringList selectVerificationInputDirectories(const QStringList& initialDirectories = QStringList());
+
+  void rebuildVerificationFileIndex();
+
+  ImageId verificationOriginalFor(const ImageId& projectImage) const;
+
+  /**
+   * \brief Makes sure the input folders being compared with hold this project's pages.
+   *
+   * Folders holding none of them are most likely another title's - or the
+   * project is not the one meant - and the comparison would be empty. Unless
+   * the operator has just chosen them, the project's own folders are tried
+   * instead (\see automaticVerificationInputs()); if those do not do either,
+   * the operator is shown the project and the folders, and can choose others.
+   *
+   * \return false if the operator would rather not compare.
+   */
+  bool confirmVerificationInputs(const ProjectPages& pages, const QString& projectFile, bool chosenByOperator = false);
+
+  /**
+   * \brief The input folders a project is compared with when nobody chose them:
+   *        those it takes its images from.
+   *
+   * The input on the left is then the very file the project processes, not a
+   * copy that may have been cleaned, resized or padded since.
+   */
+  static QStringList automaticVerificationInputs(const ProjectPages& pages);
+
+  /** \brief What the input side says when it has no image for \p projectImage. */
+  QString verificationMissingMessage(const ImageId& projectImage) const;
+
+  /** \brief Puts the "Compare with input" button on the left, above the stages. */
+  void setupCompareToggle();
+
+  /** \brief Shows the open project beside its input images, or stops. */
+  void setCompareMode(bool on);
+
+  /** \brief Offers retouching when it can be done: an open project, outside a batch. */
+  void updateRetouchAvailability();
+
+  /** \brief Compares with input folders the operator chooses. */
+  void chooseCompareFolders();
+
+  /** \brief Applies a change of comparison mode or folders: history, title, button, view. */
+  void compareModeChanged();
+
+  void updateCompareToggle();
 
   QSizeF m_maxLogicalThumbSize;
   std::shared_ptr<ProjectPages> m_pages;
@@ -304,6 +485,8 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   QString m_projectFile;
   OutputFileNameGenerator m_outFileNameGen;
   std::shared_ptr<ThumbnailPixmapCache> m_thumbnailCache;
+  /** \see retireProjectObjects() */
+  std::vector<std::shared_ptr<void>> m_retiredProjectObjects;
   std::unique_ptr<ThumbnailSequence> m_thumbSequence;
   std::unique_ptr<WorkerThreadPool> m_workerThreadPool;
   std::unique_ptr<ProcessingTaskQueue> m_batchQueue;
@@ -318,6 +501,11 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   std::unique_ptr<QWidget> m_batchProcessingWidget;
   std::unique_ptr<ProcessingIndicationWidget> m_processingIndicationWidget;
   boost::function<bool()> m_checkBeepWhenFinished;
+  // Set while continueBatchProcessing() stops a batch that ran to the end, so
+  // that batchProcessingFinished() can tell completion from an interruption.
+  bool m_batchCompleting = false;
+  // The path the last autosave took ("project_file", "snapshot", "batch_skip", ...), a string literal.
+  const char* m_lastAutoSaveBranch = "none";
   SelectedPage m_selectedPage;
   QObjectCleanupHandler m_optionsWidgetCleanup;
   QObjectCleanupHandler m_imageWidgetCleanup;
@@ -326,12 +514,37 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Ui::Ma
   int m_ignoreSelectionChanges;
   int m_ignorePageOrderingChanges;
   bool m_debug;
+  /** Whether the current project is shown beside immutable source images. */
+  bool m_verificationMode;
+  QStringList m_verificationInputDirectories;
+  QHash<QString, QStringList> m_verificationFilesByName;
   bool m_closing;
+  /** Guards against re-entering the deferred close sequence. \see closeEvent() */
+  bool m_closeRequested;
+  /** Non-zero while an unattended save must not happen. \see closeProjectInteractive() */
+  int m_ignoreAutoSave;
+  /** Whether this run may write the shared unsaved-session snapshot. */
+  bool m_unsavedSessionOwned;
+  // Held while this instance is using the per-user unsaved-session snapshot, so
+  // that another running instance does not mistake it for one left by a crash.
+  std::unique_ptr<QLockFile> m_unsavedSessionLock;
+  bool m_unsavedSessionBusyLogged;
   QTimer m_autoSaveTimer;
   StatusBarPanel* m_statusBarPanel;
   QActionGroup* m_unitsMenuActionGroup;
   QTimer m_maxLogicalThumbSizeUpdater;
   QTimer m_sceneItemsPosUpdater;
+  RetouchPanel* m_retouchPanel = nullptr;
+  QAction* m_retouchPanelAction = nullptr;
+  std::unique_ptr<RetouchController> m_retouch;
+  /** Set while the retouch editor is put on screen on its own, which verification mode must not wrap. */
+  bool m_showingRetouchEditor = false;
+  /** Null unless this copy updates itself. \see startUpdateChecks() */
+  AppUpdater* m_updater = nullptr;
+  /** Turns comparing with the input images on and off. \see setupCompareToggle() */
+  QAction* m_compareAction = nullptr;
+  /** Set while closing the application waits on the project being closed. \see timerEvent() */
+  bool m_closingProject = false;
 };
 
 

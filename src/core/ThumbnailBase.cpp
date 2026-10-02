@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "ApplicationSettings.h"
+#include "Diagnostics.h"
 #include "PixmapRenderer.h"
 
 using namespace imageproc;
@@ -56,6 +57,7 @@ QRectF ThumbnailBase::boundingRect() const {
 }
 
 void ThumbnailBase::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget) {
+  DIAG_COUNT("ui.paint.thumbnail");
   QPixmap pixmap;
 
   if (!m_completionHandler) {

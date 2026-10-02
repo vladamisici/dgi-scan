@@ -4,9 +4,11 @@
 #include "BackgroundExecutor.h"
 
 #include <QCoreApplication>
+#include <QDebug>
 #include <QThread>
 #include <cassert>
 
+#include "Diagnostics.h"
 #include "OutOfMemoryHandler.h"
 
 class BackgroundExecutor::Dispatcher : public QObject {
@@ -62,6 +64,7 @@ void BackgroundExecutor::enqueueTask(const TaskPtr& task) {
 BackgroundExecutor::Dispatcher::Dispatcher(Impl& owner) : m_owner(owner) {}
 
 void BackgroundExecutor::Dispatcher::customEvent(QEvent* event) {
+  DIAG_COUNT("bgexec.task");
   try {
     auto* evt = dynamic_cast<TaskEvent*>(event);
     assert(evt);
@@ -75,6 +78,13 @@ void BackgroundExecutor::Dispatcher::customEvent(QEvent* event) {
     }
   } catch (const std::bad_alloc&) {
     OutOfMemoryHandler::instance().handleOutOfMemorySituation();
+  } catch (const std::exception& e) {
+    // This runs on a dedicated QThread; an escaping exception would unwind out
+    // of the event loop and terminate the whole process. See the equivalent
+    // handler in WorkerThreadPool::submitTask.
+    qCritical() << "Background executor task failed:" << e.what();
+  } catch (...) {
+    qCritical() << "Background executor task failed with an unknown exception";
   }
 }
 
@@ -99,6 +109,8 @@ void BackgroundExecutor::Impl::enqueueTask(const TaskPtr& task) {
 }
 
 void BackgroundExecutor::Impl::run() {
+  // The Dispatcher lives on this thread, so every task runs under this role.
+  core::diag::setThreadRole("bgexec");
   exec();
 }
 

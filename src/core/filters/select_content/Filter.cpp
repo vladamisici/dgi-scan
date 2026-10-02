@@ -159,4 +159,13 @@ OptionsWidget* Filter::optionsWidget() {
   return m_optionsWidget.get();
 }
 
+void Filter::redetect(const ImageId& imageId) {
+  for (const PageId::SubPage subPage : {PageId::SINGLE_PAGE, PageId::LEFT_PAGE, PageId::RIGHT_PAGE}) {
+    const PageId pageId(imageId, subPage);
+    if (!m_settings->isParamsNull(pageId)) {
+      m_settings->requestRedetection(pageId);
+    }
+  }
+}
+
 }  // namespace select_content
