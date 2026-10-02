@@ -155,14 +155,13 @@ void RetouchPanel::createActions() {
   m_clearSelectionAction
       = makeAction(QStringLiteral("retouch-close"), tr("Deselect"), tr("Clear the selection (Esc)."));
   m_clearSelectionAction->setShortcut(QKeySequence(Qt::Key_Escape));
-  m_saveAction = makeAction(QStringLiteral("retouch-save"), tr("Save image"),
-                            tr("Write the changes into the input image file itself. A copy of the original is "
-                               "kept, and Restore original brings it back. Run the steps again afterwards to "
-                               "see them in the output."));
+  m_saveAction = makeAction(QStringLiteral("retouch-save"), tr("Save changes"),
+                            tr("Keep the changes with the project: they are painted over the page's output now, "
+                               "and again whenever it is made. Restore original removes them."));
   m_closeAction = makeAction(QStringLiteral("retouch-close"), tr("Close"),
                              tr("Stop retouching this page. Unsaved changes are asked about first."));
   m_restoreAction = makeAction(QStringLiteral("retouch-restore"), tr("Restore original..."),
-                               tr("Put back the scan as it was before it was first retouched."));
+                               tr("Remove all the retouching of this page's output."));
   m_smallerBrushAction = makeAction(QString(), tr("Smaller brush"), QString());
   m_smallerBrushAction->setShortcut(QKeySequence(Qt::Key_BracketLeft));
   m_largerBrushAction = makeAction(QString(), tr("Larger brush"), QString());
@@ -309,8 +308,9 @@ QWidget* RetouchPanel::buildExpandedFace() {
   layout->addWidget(toolButton(m_restoreAction, true, face));
 
   layout->addStretch(1);
-  auto* help = new QLabel(tr("Changes go into the input image file; run the steps again to carry them to the "
-                             "output. Middle button or Space+drag moves the image; the wheel zooms."),
+  auto* help = new QLabel(tr("Changes are kept with the project and painted over the page's output, now and "
+                             "whenever it is made again. Middle button or Space+drag moves the image; the wheel "
+                             "zooms."),
                           face);
   help->setWordWrap(true);
   help->setEnabled(false);
@@ -433,16 +433,16 @@ void RetouchPanel::setExpanded(const bool expanded) {
   saveSettings();
 }
 
-void RetouchPanel::setAvailable(const bool available) {
+void RetouchPanel::setAvailable(const bool available, const QString& reason) {
   m_available = available;
   m_toolGroup->setEnabled(available);
   m_smallerBrushAction->setEnabled(available);
   m_largerBrushAction->setEnabled(available);
   if (!available) {
     m_restoreAction->setEnabled(false);
-    m_statusLabel->setText(tr("Open a project to retouch its pages."));
+    m_statusLabel->setText(reason.isEmpty() ? tr("Open a project to retouch its pages.") : reason);
   } else if (!m_sessionActive) {
-    m_statusLabel->setText(tr("Pick a tool to retouch this page's input image."));
+    m_statusLabel->setText(tr("Pick a tool to retouch this page's output."));
   }
 }
 
@@ -462,7 +462,7 @@ void RetouchPanel::setSessionState(const bool loading,
     }
     m_statusLabel->setText(text);
   } else if (m_available) {
-    m_statusLabel->setText(tr("Pick a tool to retouch this page's input image."));
+    m_statusLabel->setText(tr("Pick a tool to retouch this page's output."));
   }
   if (!editing) {
     setEditState(0, false, false);

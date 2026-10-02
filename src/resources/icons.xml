@@ -224,4 +224,7 @@
   <icon name="panel-expand" styled="on">
     <file>:/icons/panel-expand.svg</file>
   </icon>
+  <icon name="compare" styled="on">
+    <file>:/icons/compare.svg</file>
+  </icon>
 </icons>

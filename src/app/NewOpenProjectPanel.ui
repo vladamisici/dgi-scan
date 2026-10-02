@@ -123,7 +123,7 @@
            </font>
           </property>
           <property name="text">
-           <string>Verification ...</string>
+           <string>Compare with Input ...</string>
           </property>
          </widget>
         </item>

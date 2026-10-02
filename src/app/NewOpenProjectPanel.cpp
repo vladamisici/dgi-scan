@@ -140,7 +140,7 @@ void NewOpenProjectPanel::addHistoryEntry(const ProjectHistory::Entry& entry) {
   nameLayout->addWidget(nameLabel, 1);
 
   if (entry.verification) {
-    auto* badge = new QLabel(tr("VERIFICATION"), row);
+    auto* badge = new QLabel(tr("COMPARE"), row);
     QFont badgeFont = badge->font();
     badgeFont.setBold(true);
     badgeFont.setPointSize(std::max(1, baseFontSize - 7));

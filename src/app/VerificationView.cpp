@@ -19,6 +19,7 @@
 #include "ImageId.h"
 #include "ImageLoader.h"
 #include "ImageViewBase.h"
+#include "ProjectHistory.h"
 
 namespace {
 const char EDITABLE_HEADER_STYLE[]
@@ -50,6 +51,13 @@ QWidget* panelWithHeader(const QString& title,
     *headerOut = header;
   }
   return panel;
+}
+
+/** A separator and the last folders of \p imagePath, for a header naming where it is; empty without one. */
+QString folderSuffix(const QString& imagePath) {
+  return imagePath.isEmpty() ? QString()
+                             : QLatin1String("   ") + QChar(0x00B7) + QLatin1String("   ")
+                                   + core::ProjectHistory::shortLocation(imagePath);
 }
 }  // namespace
 
@@ -99,11 +107,14 @@ class VerificationView::ImageLoaderTask : public AbstractCommand<BackgroundExecu
 VerificationView::VerificationView(QWidget* projectView,
                                    const ImageId& originalImage,
                                    const QString& projectImagePath,
+                                   const QString& missingMessage,
                                    QWidget* parent)
     : QWidget(parent),
       m_originalStack(new QStackedWidget(this)),
+      m_projectStack(new QStackedWidget(this)),
       m_loadingWidget(new QLabel(this)),
       m_inputHeader(nullptr),
+      m_projectHeader(nullptr),
       m_projectView(projectView),
       m_projectImagePath(projectImagePath),
       m_editing(false) {
@@ -113,10 +124,17 @@ VerificationView::VerificationView(QWidget* projectView,
   loadingLabel->setText(tr("Loading the original image..."));
   m_originalStack->addWidget(m_loadingWidget);
 
+  // Each side names where its image comes from: all titles' folders look the
+  // same, and a comparison with another title's folder must show at a glance.
+  m_inputFolder = folderSuffix(originalImage.filePath());
+  m_projectFolder = folderSuffix(projectImagePath);
+  m_projectStack->addWidget(projectView);
   auto* splitter = new QSplitter(Qt::Horizontal, this);
   splitter->setChildrenCollapsible(false);
-  splitter->addWidget(panelWithHeader(tr("INPUT - READ ONLY"), m_originalStack, false, splitter, &m_inputHeader));
-  splitter->addWidget(panelWithHeader(tr("PROJECT - EDITABLE"), projectView, true, splitter));
+  splitter->addWidget(
+      panelWithHeader(tr("INPUT - READ ONLY") + m_inputFolder, m_originalStack, false, splitter, &m_inputHeader));
+  splitter->addWidget(panelWithHeader(tr("PROJECT - EDITABLE") + m_projectFolder, m_projectStack, true, splitter,
+                                      &m_projectHeader));
   splitter->setStretchFactor(0, 1);
   splitter->setStretchFactor(1, 1);
   splitter->setSizes({1, 1});
@@ -127,9 +145,7 @@ VerificationView::VerificationView(QWidget* projectView,
 
   setToolTip(projectImagePath);
   if (originalImage.isNull()) {
-    showOriginalMessage(
-        tr("No unambiguous matching original was found in the selected input folders.\n\nProject image:\n%1")
-            .arg(projectImagePath));
+    showOriginalMessage(missingMessage);
   } else {
     ImageViewBase::backgroundExecutor().enqueueTask(std::make_shared<ImageLoaderTask>(this, originalImage));
   }
@@ -138,8 +154,19 @@ VerificationView::VerificationView(QWidget* projectView,
 void VerificationView::setInputEditor(QWidget* editor, const QString& title) {
   m_editing = true;
   m_originalStack->setCurrentIndex(m_originalStack->addWidget(editor));
-  m_inputHeader->setText(title);
+  m_inputHeader->setText(title + m_inputFolder);
   m_inputHeader->setStyleSheet(QLatin1String(EDITABLE_HEADER_STYLE));
+  editor->setFocus();
+}
+
+void VerificationView::setProjectHeader(const QString& title, const QString& imagePath) {
+  m_projectFolder = folderSuffix(imagePath);
+  m_projectHeader->setText(title + m_projectFolder);
+}
+
+void VerificationView::setProjectEditor(QWidget* editor, const QString& title) {
+  m_projectStack->setCurrentIndex(m_projectStack->addWidget(editor));
+  m_projectHeader->setText(title + m_projectFolder);
   editor->setFocus();
 }
 

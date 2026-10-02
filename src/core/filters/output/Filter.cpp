@@ -4,6 +4,8 @@
 #include "Filter.h"
 
 #include <OrderByCompletenessProvider.h>
+#include <OutputLayer.h>
+#include <CrashHandler.h>
 
 #include <utility>
 
@@ -71,6 +73,11 @@ void Filter::writePageSettings(QDomDocument& doc, QDomElement& filterEl, const P
     pageEl.appendChild(outputParams->toXml(doc, "output-params"));
   }
 
+  const retouch::OutputLayer retouchLayer(m_settings->retouchForPage(pageId));
+  if (!retouchLayer.isEmpty()) {
+    pageEl.appendChild(retouchLayer.toXml(doc, "retouch"));
+  }
+
   filterEl.appendChild(pageEl);
 }
 
@@ -128,6 +135,11 @@ void Filter::loadSettings(const ProjectReader& reader, const QDomElement& filter
       const OutputParams outputParams(outputParamsEl);
       m_settings->setOutputParams(pageId, outputParams);
     }
+
+    const QDomElement retouchEl(el.namedItem("retouch").toElement());
+    if (!retouchEl.isNull()) {
+      m_settings->setRetouch(pageId, retouch::OutputLayer(retouchEl));
+    }
   }
 }  // Filter::loadSettings
 
@@ -152,6 +164,34 @@ void Filter::invalidateOutputFor(const ImageId& imageId) {
   for (const PageId::SubPage subPage : {PageId::SINGLE_PAGE, PageId::LEFT_PAGE, PageId::RIGHT_PAGE}) {
     m_settings->removeOutputParams(PageId(imageId, subPage));
   }
+}
+
+bool Filter::addRetouch(const PageId& pageId, const std::vector<retouch::Edit>& edits, QString* error) {
+  Settings::OutputGeometry geometry;
+  if (!m_settings->outputGeometry(pageId, &geometry)) {
+    *error = tr("The page's output has not been made in this session, so the changes cannot be placed on it. "
+                "Show the page at the Output stage and try again.");
+    return false;
+  }
+  bool dropped = false;
+  m_settings->setRetouch(pageId, m_settings->retouchForPage(pageId).adding(edits, geometry.originalToOutput,
+                                                                           geometry.size, geometry.dewarped, &dropped));
+  if (dropped) {
+    core::CrashHandler::log(QStringLiteral("Retouch: earlier retouching of %1 was made on a dewarped output that has "
+                                           "changed since, and was dropped")
+                                .arg(pageId.imageId().filePath()));
+  }
+  m_settings->removeOutputParams(pageId);
+  return true;
+}
+
+bool Filter::hasRetouch(const PageId& pageId) const {
+  return !m_settings->retouchForPage(pageId).isEmpty();
+}
+
+void Filter::clearRetouch(const PageId& pageId) {
+  m_settings->setRetouch(pageId, retouch::OutputLayer());
+  m_settings->removeOutputParams(pageId);
 }
 
 void Filter::loadDefaultSettings(const PageInfo& pageInfo) {

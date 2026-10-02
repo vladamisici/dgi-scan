@@ -142,7 +142,10 @@ class RetouchController::LoadTask : public AbstractCommand<BackgroundExecutor::T
     image->size = info.size();
     image->modified = info.lastModified();
     try {
-      image->unsupported = SourceFile::unsupportedReason(m_target.imageId);
+      // The output is only read: what is painted on it is kept with the project.
+      if (!m_target.output) {
+        image->unsupported = SourceFile::unsupportedReason(m_target.imageId);
+      }
       if (image->unsupported.isEmpty()) {
         image->source = ImageLoader::load(m_target.imageId);
         if (!image->source.isNull()) {
@@ -344,7 +347,7 @@ void RetouchController::loaded(const int generation, const std::shared_ptr<Loade
   m_loadedSize = image->size;
   m_loadedTime = image->modified;
   applyPanelSettings();
-  m_host.retouchShowEditor(view, m_target.title);
+  m_host.retouchShowEditor(view, m_target.title, m_target.output);
 
   // The edits shown over the project's view of the page too, where they will
   // land when saved.
@@ -379,6 +382,9 @@ bool RetouchController::save() {
   const std::vector<Edit> edits(m_view->edits());
   if (edits.empty()) {
     return true;
+  }
+  if (m_target.output) {
+    return saveOutput(edits);
   }
   const RetouchTarget target(m_target);
   const bool carry = m_carryOver;
@@ -497,6 +503,29 @@ bool RetouchController::save() {
   return true;
 }
 
+bool RetouchController::saveOutput(const std::vector<Edit>& edits) {
+  const QString name(displayName());
+  QString error;
+  if (!m_host.retouchOutputSaved(m_page, edits, &error)) {
+    core::CrashHandler::log(QStringLiteral("Retouch: keeping %1 change(s) to the output of %2 failed: %3")
+                                .arg(edits.size())
+                                .arg(m_page.imageId().filePath(), error));
+    QMessageBox::warning(m_window, tr("Retouch"), tr("The changes to %1 could not be kept.\n\n%2").arg(name, error));
+    return false;
+  }
+  core::CrashHandler::log(QStringLiteral("Retouch: kept %1 change(s) to the output of %2 with the project")
+                              .arg(edits.size())
+                              .arg(m_page.imageId().filePath()));
+  reset();
+  updatePanel();
+  pageChanged();
+  showStatus(m_window,
+             tr("The changes are kept with the project and painted over the output, now and whenever it is made "
+                "again. Save the project to keep them."),
+             12000);
+  return true;
+}
+
 void RetouchController::closeRequested() {
   if (m_state == LOADING) {
     reset();
@@ -534,7 +563,9 @@ bool RetouchController::finish() {
     QMessageBox box(QMessageBox::Question, tr("Retouch"),
                     tr("%1 has %n unsaved change(s).", nullptr, count).arg(displayName()), QMessageBox::NoButton,
                     m_window);
-    box.setInformativeText(tr("Save writes them into the image file; a copy of the original is kept."));
+    box.setInformativeText(m_target.output
+                               ? tr("Save keeps them with the project and paints them over the page's output.")
+                               : tr("Save writes them into the image file; a copy of the original is kept."));
     QPushButton* saveButton = box.addButton(tr("Save"), QMessageBox::AcceptRole);
     QPushButton* discardButton = box.addButton(tr("Discard"), QMessageBox::DestructiveRole);
     box.addButton(tr("Keep Editing"), QMessageBox::RejectRole);
@@ -576,6 +607,10 @@ void RetouchController::restoreRequested() {
       QMessageBox::information(m_window, tr("Restore Original"), whyNot);
       return;
     }
+  }
+  if (target.output) {
+    restoreOutput(page);
+    return;
   }
   const QString path(target.imageId.filePath());
   const bool separateCopy = !target.projectImageId.isNull() && !target.editsProjectImage();
@@ -647,6 +682,28 @@ void RetouchController::restoreRequested() {
   m_host.retouchSessionEnded();
 }
 
+void RetouchController::restoreOutput(const PageInfo& page) {
+  if (!m_host.retouchOutputHasEdits(page)) {
+    pageChanged();
+    return;
+  }
+  QString question(tr("Remove all the retouching of the output of %1?").arg(displayNameOf(page.imageId())));
+  if (hasUnsavedEdits()) {
+    question += QLatin1String("\n\n") + tr("The unsaved changes will be discarded.");
+  }
+  if (QMessageBox::question(m_window, tr("Restore Original"), question, QMessageBox::Yes | QMessageBox::Cancel,
+                            QMessageBox::Cancel)
+      != QMessageBox::Yes) {
+    return;
+  }
+  m_host.retouchOutputRestore(page);
+  core::CrashHandler::log(QStringLiteral("Retouch: removed the retouching of the output of %1")
+                              .arg(page.imageId().filePath()));
+  reset();
+  updatePanel();
+  m_host.retouchSessionEnded();
+}
+
 void RetouchController::abandon() {
   if (m_state == IDLE) {
     return;
@@ -660,8 +717,8 @@ void RetouchController::abandon() {
   updatePanel();
 }
 
-void RetouchController::setAvailable(const bool available) {
-  m_panel.setAvailable(available);
+void RetouchController::setAvailable(const bool available, const QString& reason) {
+  m_panel.setAvailable(available, reason);
   updatePanel();
   pageChanged();
 }
@@ -677,10 +734,14 @@ void RetouchController::pageChanged() {
     QString whyNot;
     const PageInfo page(m_host.retouchCurrentPage());
     if (isActive() || (!page.isNull() && m_host.retouchTarget(page, &target, &whyNot))) {
-      const OriginalsBackup backup(outputDir);
-      backedUp = backup.contains(target.imageId.filePath())
-                 || (!target.projectImageId.isNull() && !target.editsProjectImage()
-                     && backup.contains(target.projectImageId.filePath()));
+      if (target.output) {
+        backedUp = m_host.retouchOutputHasEdits(isActive() ? m_page : page);
+      } else {
+        const OriginalsBackup backup(outputDir);
+        backedUp = backup.contains(target.imageId.filePath())
+                   || (!target.projectImageId.isNull() && !target.editsProjectImage()
+                       && backup.contains(target.projectImageId.filePath()));
+      }
     }
   }
   m_panel.setRestoreAvailable(backedUp);

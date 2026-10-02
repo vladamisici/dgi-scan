@@ -4,9 +4,12 @@
 #ifndef SCANTAILOR_OUTPUT_FILTER_H_
 #define SCANTAILOR_OUTPUT_FILTER_H_
 
+#include <Edit.h>
+
 #include <QCoreApplication>
 #include <QImage>
 #include <memory>
+#include <vector>
 
 #include "AbstractFilter.h"
 #include "FillZonePropFactory.h"
@@ -59,6 +62,22 @@ class Filter : public AbstractFilter {
    * an uncompressed scan leaves the size exactly as it was.
    */
   void invalidateOutputFor(const ImageId& imageId);
+
+  /**
+   * \brief Adds \p edits, painted on the page's output as it is now, to the page's retouching.
+   *
+   * The output is made again, with them, the next time the page is processed;
+   * every time after that too. \see retouch::OutputLayer
+   *
+   * \return false, with the reason in \p error, if the page's output has not
+   *         been made in this session, so the edits could not be placed on it.
+   */
+  bool addRetouch(const PageId& pageId, const std::vector<retouch::Edit>& edits, QString* error);
+
+  bool hasRetouch(const PageId& pageId) const;
+
+  /** \brief Removes the page's retouching; its output is made again without it. */
+  void clearRetouch(const PageId& pageId);
 
   std::shared_ptr<Task> createTask(const PageId& pageId,
                                    std::shared_ptr<ThumbnailPixmapCache> thumbnailCache,

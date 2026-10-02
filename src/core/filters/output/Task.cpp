@@ -4,10 +4,14 @@
 #include "Task.h"
 
 #include <DewarpingPointMapper.h>
+#include <OutputLayer.h>
 #include <PolygonUtils.h>
 #include <UnitsProvider.h>
+#include <core/CrashHandler.h>
 #include <core/Diagnostics.h>
 #include <core/TiffWriter.h>
+
+#include <algorithm>
 
 #include <QDebug>
 #include <QDir>
@@ -390,6 +394,25 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data, 
     }
 
     {
+      // The page's retouching, kept with the project, over the output made afresh.
+      const retouch::OutputLayer retouchLayer(m_settings->retouchForPage(m_pageId));
+      if (!retouchLayer.isEmpty()) {
+        DIAG_SCOPE(retouchScope, "output.retouch");
+        const bool dewarped
+            = (params.dewarpingOptions().dewarpingMode() != OFF) && params.distortionModel().isValid();
+        const int paperRing = std::max(4, qRound(params.outputDpi().horizontal() / 50.0));
+        const bool applied = retouchLayer.applyTo(outImg, newXform.transform(), dewarped, paperRing);
+        retouchScope.attr(core::diag::Attr("edits", static_cast<int>(retouchLayer.edits().size())));
+        retouchScope.attr(core::diag::Attr("applied", applied));
+        if (!applied) {
+          core::CrashHandler::log(QStringLiteral("Retouch: the retouching of %1 was not painted over its output: it "
+                                                 "was made on a dewarped output whose geometry has changed since")
+                                      .arg(m_pageId.imageId().filePath()));
+        }
+      }
+    }
+
+    {
       DIAG_SCOPE(writeScope, "output.write");
       if (!renderParams.originalBackground()) {
         QFile::remove(originalBackgroundFilePath);
@@ -452,6 +475,15 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data, 
     }
 
     m_thumbnailCache->recreateThumbnail(ImageId(outFilePath), outImg);
+  }
+
+  {
+    // What retouching painted on this output now is relative to.
+    Settings::OutputGeometry geometry;
+    geometry.originalToOutput = newXform.transform();
+    geometry.size = outImg.size();
+    geometry.dewarped = (params.dewarpingOptions().dewarpingMode() != OFF) && params.distortionModel().isValid();
+    m_settings->setOutputGeometry(m_pageId, geometry);
   }
 
   // DespeckleState's images exist only to drive the despeckling UI, and

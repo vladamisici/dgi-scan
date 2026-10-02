@@ -8,6 +8,7 @@ set(sources
     TestProjectRecovery.cpp
     TestRetouchEdits.cpp
     TestRetouchFiles.cpp
+    TestRetouchOutput.cpp
     TestSmartFilenameOrdering.cpp)
 
 add_executable(core_tests ${sources})

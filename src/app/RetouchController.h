@@ -4,6 +4,8 @@
 #ifndef SCANTAILOR_APP_RETOUCHCONTROLLER_H_
 #define SCANTAILOR_APP_RETOUCHCONTROLLER_H_
 
+#include <Edit.h>
+
 #include <QDateTime>
 #include <QObject>
 #include <QPointer>
@@ -11,6 +13,7 @@
 #include <QString>
 #include <functional>
 #include <memory>
+#include <vector>
 
 #include "Dpi.h"
 #include "ImageId.h"
@@ -48,6 +51,12 @@ struct RetouchTarget {
   OrthogonalRotation rotation;
   /** The header over the image while it is being edited. */
   QString title;
+  /**
+   * The page's output. The edits are then kept with the project and painted
+   * over the output each time it is made, instead of being written into
+   * imageId - the output file, only shown.
+   */
+  bool output = false;
 
   /** \brief Whether the project's image is the very file being edited. */
   bool editsProjectImage() const;
@@ -79,8 +88,12 @@ class RetouchHost {
 
   virtual std::shared_ptr<ThumbnailPixmapCache> retouchThumbnailCache() const = 0;
 
-  /** \brief Puts \p editor where the input image is shown, taking ownership of it. */
-  virtual void retouchShowEditor(QWidget* editor, const QString& title) = 0;
+  /**
+   * \brief Puts \p editor where the image it edits is shown, taking ownership of it.
+   *
+   * \p output: the image is the page's output, rather than its input.
+   */
+  virtual void retouchShowEditor(QWidget* editor, const QString& title, bool output) = 0;
 
   /**
    * \brief The view showing the pixels of the project's image of the page, if one is on screen.
@@ -95,6 +108,21 @@ class RetouchHost {
 
   /** \brief The project's image \p projectImageId now holds different pixels. */
   virtual void retouchSourceReplaced(const ImageId& projectImageId) = 0;
+
+  /**
+   * \brief Keeps \p edits, painted on \p page's output, with the project.
+   *
+   * The output is made again with them, and every time after.
+   *
+   * \return false, with the reason in \p error, if they could not be kept.
+   */
+  virtual bool retouchOutputSaved(const PageInfo& page, const std::vector<retouch::Edit>& edits, QString* error) = 0;
+
+  /** \brief Whether \p page's output has retouching kept with the project. */
+  virtual bool retouchOutputHasEdits(const PageInfo& page) const = 0;
+
+  /** \brief Removes \p page's retouching; its output is made again without it. */
+  virtual void retouchOutputRestore(const PageInfo& page) = 0;
 };
 
 
@@ -149,8 +177,11 @@ class RetouchController : public QObject {
    */
   void abandon();
 
-  /** \brief Whether pages can be retouched at all, now: a project is open and no batch is running. */
-  void setAvailable(bool available);
+  /**
+   * \brief Whether pages can be retouched at all, now: a project is open, no
+   *        batch is running, the Output stage is on screen. \p reason says why not.
+   */
+  void setAvailable(bool available, const QString& reason = QString());
 
   /** \brief Another page is on screen: the panel offers what applies to it. */
   void pageChanged();
@@ -170,6 +201,12 @@ class RetouchController : public QObject {
 
   /** \return whether the file was written. Failures are reported. */
   bool save();
+
+  /** \brief save() for the page's output: the edits are kept with the project. */
+  bool saveOutput(const std::vector<retouch::Edit>& edits);
+
+  /** \brief Removes the retouching of \p page's output, once the operator agrees. */
+  void restoreOutput(const PageInfo& page);
 
   void closeRequested();
 

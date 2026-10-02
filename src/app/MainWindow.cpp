@@ -24,6 +24,7 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QLockFile>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QResource>
@@ -31,6 +32,7 @@
 #include <QScrollBar>
 #include <QSortFilterProxyModel>
 #include <QStackedLayout>
+#include <QToolButton>
 #include <QtWidgets/QInputDialog>
 #include <boost/lambda/lambda.hpp>
 #include <cmath>
@@ -153,6 +155,7 @@ MainWindow::MainWindow()
   setupUi(this);
   setupIcons();
   setupRetouch();
+  setupCompareToggle();
 
   sortOptions->setVisible(false);
 
@@ -503,7 +506,8 @@ void MainWindow::switchToNewProject(const std::shared_ptr<ProjectPages>& pages,
   // one place that reliably knows whether autosave should be running.
   CrashHandler::setCurrentProjectFile(m_projectFile);
   updateAutoSaveTimer();
-  m_retouch->setAvailable(retouchAllowed());
+  updateRetouchAvailability();
+  updateCompareToggle();
 
   if (!QDir(outDir).exists()) {
     showRelinkingDialog();
@@ -920,8 +924,15 @@ void MainWindow::setImageWidget(QWidget* widget, const Ownership ownership, Debu
       && Utils::castOrFindChild<ImageViewBase*>(widget)) {
     const PageInfo page(m_thumbSequence->selectionLeader());
     if (!page.isNull()) {
-      presentedWidget = new VerificationView(widget, verificationOriginalFor(page.imageId()),
-                                             page.imageId().filePath());
+      const ImageId original(verificationOriginalFor(page.imageId()));
+      auto* verification = new VerificationView(
+          widget, original, page.imageId().filePath(),
+          original.isNull() ? verificationMissingMessage(page.imageId()) : QString());
+      if (isOutputFilter()) {
+        // The output is on the right here, and it is what gets retouched.
+        verification->setProjectHeader(tr("OUTPUT"), m_outFileNameGen.filePathFor(page.id()));
+      }
+      presentedWidget = verification;
     }
   }
 
@@ -1397,6 +1408,14 @@ void MainWindow::filterSelectionChanged(const QItemSelection& selected) {
     return;
   }
 
+  // The output being retouched is about to give way to another stage. If the
+  // operator would rather keep editing, the stage stays the one they edit at.
+  if (m_retouch && m_retouch->isActive() && !m_retouch->finish()) {
+    const ScopedIncDec<int> guard(m_ignoreSelectionChanges);
+    filterList->selectRow(m_curFilter);
+    return;
+  }
+
   m_interactiveQueue->cancelAndClear();
   if (m_batchQueue) {
     // Should not happen, but just in case.
@@ -1445,6 +1464,8 @@ void MainWindow::filterSelectionChanged(const QItemSelection& selected) {
   }
 
   updateMainArea();
+  // Retouching is done on the output, so only at the Output stage.
+  updateRetouchAvailability();
 }  // MainWindow::filterSelectionChanged
 
 void MainWindow::switchFilter1() {
@@ -1526,6 +1547,7 @@ void MainWindow::startBatchProcessing() {
   filterList->setBatchProcessingInProgress(true);
   filterList->setEnabled(false);
   m_retouch->setAvailable(false);
+  updateCompareToggle();
 
   BackgroundTaskPtr task(m_batchQueue->takeForProcessing());
   if (task) {
@@ -1568,7 +1590,8 @@ void MainWindow::stopBatchProcessing(MainAreaAction mainArea) {
 
   filterList->setBatchProcessingInProgress(false);
   filterList->setEnabled(true);
-  m_retouch->setAvailable(retouchAllowed());
+  updateRetouchAvailability();
+  updateCompareToggle();
 
   switch (mainArea) {
     case UPDATE_MAIN_AREA:
@@ -1873,22 +1896,20 @@ void MainWindow::startVerification() {
   }
 
   const QString projectDir(QSettings().value("project/lastDir").toString());
-  const QString projectFile(QFileDialog::getOpenFileName(this, tr("Open Project for Verification"), projectDir,
+  const QString projectFile(QFileDialog::getOpenFileName(this, tr("Open Project to Compare with Input"), projectDir,
                                                          tr("Scan Tailor Projects")
                                                              + " (*.ScanTailor *.scantailorProject)"));
   if (projectFile.isEmpty()) {
     return;
   }
 
-  const QStringList inputDirectories = selectVerificationInputDirectories();
-  if (inputDirectories.isEmpty()) {
-    return;
-  }
-
-  CrashHandler::log(QStringLiteral("Open: picked for verification in the dialog, which started in %1: %2; inputs: %3")
-                        .arg(projectDir, projectFile, inputDirectories.join(QStringLiteral("; "))));
+  // No folders to pick: they are found from the project once it is open, and
+  // picking them is where another title's folder - identical but for its
+  // number - used to slip in.
+  CrashHandler::log(QStringLiteral("Open: picked to compare with input in the dialog, which started in %1: %2")
+                        .arg(projectDir, projectFile));
   m_verificationMode = true;
-  m_verificationInputDirectories = inputDirectories;
+  m_verificationInputDirectories.clear();
   m_verificationFilesByName.clear();
   openProjectWithCurrentMode(projectFile);
 }
@@ -1899,24 +1920,21 @@ void MainWindow::openRecentVerificationProject(const QString& projectFile,
     return;
   }
 
-  bool inputSelectionNeeded = inputDirectories.isEmpty();
+  // The folders it was last compared with, as long as they are all still
+  // there; otherwise they are found from the project again once it is open.
+  QStringList directories = inputDirectories;
   for (const QString& directory : inputDirectories) {
     if (!QDir(directory).exists()) {
-      inputSelectionNeeded = true;
+      directories.clear();
       break;
     }
   }
 
-  const QStringList selectedDirectories
-      = inputSelectionNeeded ? selectVerificationInputDirectories(inputDirectories) : inputDirectories;
-  if (selectedDirectories.isEmpty()) {
-    return;
-  }
-
-  CrashHandler::log(QStringLiteral("Open: picked for verification from the recent projects: %1; inputs: %2")
-                        .arg(projectFile, selectedDirectories.join(QStringLiteral("; "))));
+  CrashHandler::log(QStringLiteral("Open: picked to compare with input from the recent projects: %1; inputs: %2")
+                        .arg(projectFile, directories.isEmpty() ? QStringLiteral("from the project")
+                                                                : directories.join(QStringLiteral("; "))));
   m_verificationMode = true;
-  m_verificationInputDirectories = selectedDirectories;
+  m_verificationInputDirectories = directories;
   m_verificationFilesByName.clear();
   openProjectWithCurrentMode(projectFile);
 }
@@ -2006,6 +2024,10 @@ void MainWindow::loadProjectDocument(const QString& projectFile, const QString& 
 void MainWindow::projectOpened(ProjectOpeningContext* context) {
   // Before the history: the folders it remembers are the ones settled on here.
   if (m_verificationMode) {
+    if (m_verificationInputDirectories.isEmpty()) {
+      m_verificationInputDirectories
+          = automaticVerificationInputs(*context->projectReader()->pages());
+    }
     rebuildVerificationFileIndex();
     if (!confirmVerificationInputs(*context->projectReader()->pages(), context->projectFile())) {
       m_verificationMode = false;
@@ -2035,15 +2057,14 @@ void MainWindow::projectOpened(ProjectOpeningContext* context) {
 
 QStringList MainWindow::selectVerificationInputDirectories(const QStringList& initialDirectories) {
   QDialog dialog(this);
-  dialog.setWindowTitle(tr("Verification Input Folders"));
+  dialog.setWindowTitle(tr("Input Folders to Compare With"));
   dialog.setWindowModality(Qt::WindowModal);
   dialog.resize(620, 320);
 
   auto* layout = new QVBoxLayout(&dialog);
   auto* explanation = new QLabel(
-      tr("Add the folder or folders containing the unedited input images. They are shown for comparison, and are "
-         "only changed when an input image is retouched and saved - with a copy of the original kept in the "
-         "project's output folder."),
+      tr("The folder or folders holding the input images to show beside the pages. Without a choice they are "
+         "the folders the project takes its images from. Input images are only read here, never changed."),
       &dialog);
   explanation->setWordWrap(true);
   layout->addWidget(explanation);
@@ -2082,11 +2103,18 @@ QStringList MainWindow::selectVerificationInputDirectories(const QStringList& in
   };
   connect(folders, &QListWidget::itemSelectionChanged, &dialog, updateButtons);
   connect(addFolder, &QPushButton::clicked, &dialog, [this, folders, updateButtons]() {
-    const QString startDir = folders->count() > 0
-                                 ? folders->item(folders->count() - 1)->text()
-                                 : QSettings().value("verification/lastInputDir").toString();
+    // Near this title rather than where the last one's inputs were: every
+    // title's folders look the same, and one click would take the wrong one.
+    QString startDir;
+    if (folders->count() > 0) {
+      startDir = folders->item(folders->count() - 1)->text();
+    } else if (!m_projectFile.isEmpty()) {
+      startDir = QFileInfo(m_projectFile).absolutePath();
+    } else {
+      startDir = QSettings().value("verification/lastInputDir").toString();
+    }
     const QString directory
-        = QFileDialog::getExistingDirectory(this, tr("Add Verification Input Folder"), startDir,
+        = QFileDialog::getExistingDirectory(this, tr("Add Input Folder"), startDir,
                                             QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
     if (directory.isEmpty()) {
       return;
@@ -2170,33 +2198,58 @@ ImageId MainWindow::verificationOriginalFor(const ImageId& projectImage) const {
   return bestScoreIsAmbiguous ? ImageId() : ImageId(bestCandidate, projectImage.page());
 }
 
-bool MainWindow::confirmVerificationInputs(const ProjectPages& pages, const QString& projectFile) {
+bool MainWindow::confirmVerificationInputs(const ProjectPages& pages,
+                                           const QString& projectFile,
+                                           const bool chosenByOperator) {
   const PageSequence sequence(pages.toPageSequence(IMAGE_VIEW));
   if (sequence.numPages() == 0) {
     return true;
   }
-  while (true) {
+  const auto anyPageFound = [this, &sequence]() {
     for (const PageInfo& page : sequence) {
       if (m_verificationFilesByName.contains(QFileInfo(page.imageId().filePath()).fileName().toCaseFolded())) {
         return true;
       }
     }
+    return false;
+  };
+  if (anyPageFound()) {
+    return true;
+  }
 
+  if (!chosenByOperator) {
+    // Folders remembered from an earlier time, or picked by mistake - another
+    // title's folder looks just like this one's - give way to the project's own.
+    const QStringList automatic = automaticVerificationInputs(pages);
+    if (automatic != m_verificationInputDirectories) {
+      const QStringList previous = m_verificationInputDirectories;
+      m_verificationInputDirectories = automatic;
+      rebuildVerificationFileIndex();
+      if (anyPageFound()) {
+        CrashHandler::log(QStringLiteral("Compare: none of the pages of %1 is in %2; comparing with %3 instead")
+                              .arg(projectFile, previous.join(QStringLiteral("; ")),
+                                   automatic.join(QStringLiteral("; "))));
+        return true;
+      }
+    }
+  }
+
+  while (!anyPageFound()) {
     QStringList folders;
     for (const QString& directory : m_verificationInputDirectories) {
       folders << QDir::toNativeSeparators(directory);
     }
-    CrashHandler::log(QStringLiteral("Verification: none of the %1 pages of %2 has an input image in %3")
+    CrashHandler::log(QStringLiteral("Compare: none of the %1 pages of %2 has an input image in %3")
                           .arg(sequence.numPages())
                           .arg(projectFile, folders.join(QStringLiteral("; "))));
 
-    QMessageBox box(QMessageBox::Warning, tr("Verification"),
-                    tr("None of this project's pages has an input image in the chosen folders, so there would be "
+    QMessageBox box(QMessageBox::Warning, tr("Compare with Input"),
+                    tr("None of this project's pages has an input image in these folders, so there would be "
                        "nothing to compare them with.\n\nProject:\n%1\n\nInput folders:\n%2")
                         .arg(QDir::toNativeSeparators(projectFile), folders.join(QLatin1Char('\n'))),
                     QMessageBox::NoButton, this);
     QPushButton* const chooseBtn = box.addButton(tr("Choose Folders..."), QMessageBox::AcceptRole);
-    QPushButton* const openBtn = box.addButton(tr("Open Anyway"), QMessageBox::DestructiveRole);
+    QPushButton* const openBtn = box.addButton(tr("Compare Anyway"), QMessageBox::DestructiveRole);
     box.addButton(QMessageBox::Cancel);
     box.setDefaultButton(chooseBtn);
     box.exec();
@@ -2213,6 +2266,154 @@ bool MainWindow::confirmVerificationInputs(const ProjectPages& pages, const QStr
       rebuildVerificationFileIndex();
     }
   }
+  return true;
+}
+
+QStringList MainWindow::automaticVerificationInputs(const ProjectPages& pages) {
+  QStringList folders;
+  for (const PageInfo& page : pages.toPageSequence(IMAGE_VIEW)) {
+    const QString folder = QDir::cleanPath(QFileInfo(page.imageId().filePath()).absolutePath());
+    if (!folders.contains(folder, Qt::CaseInsensitive)) {
+      folders << folder;
+    }
+  }
+  return folders;
+}
+
+QString MainWindow::verificationMissingMessage(const ImageId& projectImage) const {
+  const QString name = QFileInfo(projectImage.filePath()).fileName();
+  const QStringList candidates = m_verificationFilesByName.value(name.toCaseFolded());
+  const QString projectImagePath = QDir::toNativeSeparators(projectImage.filePath());
+  if (candidates.isEmpty()) {
+    QStringList folders;
+    for (const QString& directory : m_verificationInputDirectories) {
+      folders << QDir::toNativeSeparators(directory);
+    }
+    return tr("There is no %1 in the input folders:\n%2\n\nProject image:\n%3")
+        .arg(name, folders.join(QLatin1Char('\n')), projectImagePath);
+  }
+  QStringList found;
+  for (const QString& candidate : candidates) {
+    found << QDir::toNativeSeparators(candidate);
+  }
+  return tr("There are several images called %1 in the input folders, and none of them is more clearly this "
+            "page's than the others:\n%2\n\nProject image:\n%3")
+      .arg(name, found.join(QLatin1Char('\n')), projectImagePath);
+}
+
+void MainWindow::setupCompareToggle() {
+  m_compareAction = new QAction(IconProvider::getInstance().getIcon("compare"), tr("Compare with Input"), this);
+  m_compareAction->setCheckable(true);
+  m_compareAction->setShortcut(QKeySequence(Qt::Key_F7));
+  m_compareAction->setToolTip(
+      tr("Show each page beside its input image (F7): the image the project takes the page from."));
+  m_compareAction->setStatusTip(tr("Show each page beside its input image."));
+  // Toggled rather than triggered: the button can also be switched without a click, by accessibility tools.
+  connect(m_compareAction, &QAction::toggled, this, [this](const bool checked) { setCompareMode(checked); });
+
+  auto* chooseFoldersAction = new QAction(tr("Choose Input Folders..."), this);
+  chooseFoldersAction->setStatusTip(tr("Compare with input images from folders of your choice."));
+  connect(chooseFoldersAction, &QAction::triggered, this, [this]() { chooseCompareFolders(); });
+  auto* menu = new QMenu(this);
+  menu->addAction(chooseFoldersAction);
+
+  // On the left, above the stages, where it is in sight whatever the stage.
+  auto* button = new QToolButton(dockWidgetContents_5);
+  button->setDefaultAction(m_compareAction);
+  button->setMenu(menu);
+  button->setPopupMode(QToolButton::MenuButtonPopup);
+  button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  verticalLayout_3->insertWidget(0, button);
+
+  // And in the Tools menu, with the other ways of showing the page.
+  const QList<QAction*> toolsActions(menuDebug->actions());
+  const int lowResIdx = toolsActions.indexOf(actionLowResDisplay);
+  menuDebug->insertAction((lowResIdx >= 0) ? toolsActions[lowResIdx] : nullptr, m_compareAction);
+  updateCompareToggle();
+}
+
+void MainWindow::setCompareMode(const bool on) {
+  if ((on == m_verificationMode) || !isProjectLoaded() || isBatchProcessingInProgress()) {
+    updateCompareToggle();
+    return;
+  }
+  // The image being retouched goes first: the view it is shown in is about to be replaced.
+  if (m_retouch->isActive() && !m_retouch->finish()) {
+    updateCompareToggle();
+    return;
+  }
+  if (on) {
+    m_verificationInputDirectories = automaticVerificationInputs(*m_pages);
+    rebuildVerificationFileIndex();
+    if (!confirmVerificationInputs(*m_pages, m_projectFile)) {
+      m_verificationInputDirectories.clear();
+      m_verificationFilesByName.clear();
+      updateCompareToggle();
+      return;
+    }
+  } else {
+    m_verificationInputDirectories.clear();
+    m_verificationFilesByName.clear();
+  }
+  m_verificationMode = on;
+  CrashHandler::log(on ? QStringLiteral("Compare: on, with ") + m_verificationInputDirectories.join(QStringLiteral("; "))
+                       : QStringLiteral("Compare: off"));
+  compareModeChanged();
+}
+
+void MainWindow::chooseCompareFolders() {
+  if (!isProjectLoaded() || isBatchProcessingInProgress()) {
+    return;
+  }
+  const QStringList chosen = selectVerificationInputDirectories(
+      m_verificationMode ? m_verificationInputDirectories : automaticVerificationInputs(*m_pages));
+  if (chosen.isEmpty()) {
+    return;
+  }
+  if (m_retouch->isActive() && !m_retouch->finish()) {
+    return;
+  }
+
+  const QStringList previous = m_verificationInputDirectories;
+  m_verificationInputDirectories = chosen;
+  rebuildVerificationFileIndex();
+  if (!confirmVerificationInputs(*m_pages, m_projectFile, true)) {
+    m_verificationInputDirectories = previous;
+    if (m_verificationMode) {
+      rebuildVerificationFileIndex();
+    } else {
+      m_verificationFilesByName.clear();
+    }
+    updateCompareToggle();
+    return;
+  }
+  m_verificationMode = true;
+  CrashHandler::log(QStringLiteral("Compare: on, with folders chosen by the operator: ")
+                    + m_verificationInputDirectories.join(QStringLiteral("; ")));
+  compareModeChanged();
+}
+
+void MainWindow::compareModeChanged() {
+  if (!m_projectFile.isEmpty()) {
+    // Opened from the recent list, the project comes back the way it was left.
+    ProjectHistory history;
+    history.read();
+    history.setVerification(m_projectFile, m_verificationMode, m_verificationInputDirectories);
+    history.write();
+  }
+  updateWindowTitle();
+  updateCompareToggle();
+  updateMainArea();
+}
+
+void MainWindow::updateCompareToggle() {
+  if (!m_compareAction) {
+    return;
+  }
+  m_compareAction->setEnabled(isProjectLoaded() && !isBatchProcessingInProgress());
+  const QSignalBlocker blocker(m_compareAction);
+  m_compareAction->setChecked(m_verificationMode);
 }
 
 void MainWindow::closeProject() {
@@ -2488,7 +2689,7 @@ void MainWindow::updateWindowTitle() {
                   + QFileInfo(m_projectFile).completeBaseName();
   }
   if (m_verificationMode) {
-    projectName += tr(" [Verification]");
+    projectName += tr(" [Compare with Input]");
   }
   const QString version(QString::fromUtf8(VERSION));
   setWindowTitle(tr("%1 - %2 [%3bit]")
@@ -3189,34 +3390,58 @@ PageInfo MainWindow::retouchCurrentPage() const {
 }
 
 bool MainWindow::retouchAllowed() const {
-  return isProjectLoaded() && !isBatchProcessingInProgress();
+  return isProjectLoaded() && !isBatchProcessingInProgress() && isOutputFilter();
+}
+
+void MainWindow::updateRetouchAvailability() {
+  if (!isProjectLoaded() || isBatchProcessingInProgress()) {
+    m_retouch->setAvailable(false);
+  } else if (!isOutputFilter()) {
+    m_retouch->setAvailable(false, tr("Retouching is done on the output: open the Output stage."));
+  } else {
+    m_retouch->setAvailable(true);
+  }
 }
 
 bool MainWindow::retouchTarget(const PageInfo& page, RetouchTarget* target, QString* whyNot) const {
-  // The project's own image of the page gets the changes in either mode.
-  target->projectImageId = page.imageId();
-  target->projectImageSize = page.metadata().size();
-  if (m_verificationMode) {
-    // The input image on the left, as it is shown there: the file's own
-    // resolution, unrotated. When it is a separate copy, saving changes the
-    // project's image too, so that the output loses what the input did.
-    const ImageId original(verificationOriginalFor(page.imageId()));
-    if (original.isNull()) {
-      *whyNot = tr("No input image matching this page was found in the verification folders, so there is "
-                   "nothing to retouch.");
-      return false;
-    }
-    target->imageId = original;
-    target->dpi = Dpi();
-    target->rotation = OrthogonalRotation();
-    target->title = tr("INPUT - RETOUCHING");
-    return true;
+  // The output, where what is painted is what the page ends up with: no
+  // re-running of the steps, and nothing lost to a copy of another shape.
+  if (!isOutputFilter()) {
+    *whyNot = tr("Retouching is done on the output: open the Output stage.");
+    return false;
   }
-  target->imageId = page.imageId();
-  target->dpi = page.metadata().dpi();
-  target->rotation = m_stages->fixOrientationFilter()->rotationFor(page.imageId());
-  target->title = tr("SOURCE IMAGE - RETOUCHING");
+  const QString outputPath(m_outFileNameGen.filePathFor(page.id()));
+  if (!QFileInfo::exists(outputPath)) {
+    *whyNot = tr("This page has no output yet. Let the Output stage finish making it, then retouch it.");
+    return false;
+  }
+  target->output = true;
+  target->imageId = ImageId(outputPath);
+  target->projectImageId = ImageId();
+  target->projectImageSize = QSize();
+  target->dpi = Dpi();
+  target->rotation = OrthogonalRotation();
+  target->title = tr("OUTPUT - RETOUCHING");
   return true;
+}
+
+bool MainWindow::retouchOutputSaved(const PageInfo& page,
+                                    const std::vector<retouch::Edit>& edits,
+                                    QString* error) {
+  if (!m_stages->outputFilter()->addRetouch(page.id(), edits, error)) {
+    return false;
+  }
+  m_thumbSequence->invalidateThumbnail(page.id());
+  return true;
+}
+
+bool MainWindow::retouchOutputHasEdits(const PageInfo& page) const {
+  return m_stages->outputFilter()->hasRetouch(page.id());
+}
+
+void MainWindow::retouchOutputRestore(const PageInfo& page) {
+  m_stages->outputFilter()->clearRetouch(page.id());
+  m_thumbSequence->invalidateThumbnail(page.id());
 }
 
 ImageViewBase* MainWindow::retouchProjectView() const {
@@ -3245,20 +3470,24 @@ std::shared_ptr<ThumbnailPixmapCache> MainWindow::retouchThumbnailCache() const 
   return m_thumbnailCache;
 }
 
-void MainWindow::retouchShowEditor(QWidget* editor, const QString& title) {
+void MainWindow::retouchShowEditor(QWidget* editor, const QString& title, const bool output) {
   // A page result arriving now would replace the editor.
   m_interactiveQueue->cancelAndClear();
 
   if (m_verificationMode) {
-    // In place of the input image, with the project's view of the page left
-    // as it is on the right - if that view is of this page, and finished: one
-    // still being processed would replace the editor when it arrives.
+    // Beside the input image, in place of the view of the page it replaces -
+    // if that view is of this page, and finished: one still being processed
+    // would replace the editor when it arrives.
     VerificationView* verification = currentVerificationView();
     const PageInfo page(m_thumbSequence->selectionLeader());
     const bool stillLoading = (m_imageFrameLayout->indexOf(m_processingIndicationWidget.get()) != -1);
     if (verification && !stillLoading && !page.isNull()
         && (verification->projectImagePath() == page.imageId().filePath())) {
-      verification->setInputEditor(editor, title);
+      if (output) {
+        verification->setProjectEditor(editor, title);
+      } else {
+        verification->setInputEditor(editor, title);
+      }
       return;
     }
   }

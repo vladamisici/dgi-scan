@@ -1,5 +1,6 @@
 set(sources
     Edit.cpp Edit.h
+    OutputLayer.cpp OutputLayer.h
     Selection.cpp Selection.h
     SourceFile.cpp SourceFile.h
     JpegPatch.cpp JpegPatch.h

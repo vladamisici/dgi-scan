@@ -409,11 +409,17 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Retouc
 
   std::shared_ptr<ThumbnailPixmapCache> retouchThumbnailCache() const override;
 
-  void retouchShowEditor(QWidget* editor, const QString& title) override;
+  void retouchShowEditor(QWidget* editor, const QString& title, bool output) override;
 
   void retouchSessionEnded() override;
 
   void retouchSourceReplaced(const ImageId& imageId) override;
+
+  bool retouchOutputSaved(const PageInfo& page, const std::vector<retouch::Edit>& edits, QString* error) override;
+
+  bool retouchOutputHasEdits(const PageInfo& page) const override;
+
+  void retouchOutputRestore(const PageInfo& page) override;
 
   /** \brief Puts the page being retouched back as the selected one, after the operator chose to keep editing. */
   void keepRetouchedPageSelected();
@@ -432,15 +438,46 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Retouc
   ImageId verificationOriginalFor(const ImageId& projectImage) const;
 
   /**
-   * \brief Makes sure the verification input folders hold this project's pages.
+   * \brief Makes sure the input folders being compared with hold this project's pages.
    *
    * Folders holding none of them are most likely another title's - or the
-   * project is not the one meant - and the comparison would be empty. The
-   * operator is shown both and can choose the folders again.
+   * project is not the one meant - and the comparison would be empty. Unless
+   * the operator has just chosen them, the project's own folders are tried
+   * instead (\see automaticVerificationInputs()); if those do not do either,
+   * the operator is shown the project and the folders, and can choose others.
    *
-   * \return false if the operator would rather not open the project.
+   * \return false if the operator would rather not compare.
    */
-  bool confirmVerificationInputs(const ProjectPages& pages, const QString& projectFile);
+  bool confirmVerificationInputs(const ProjectPages& pages, const QString& projectFile, bool chosenByOperator = false);
+
+  /**
+   * \brief The input folders a project is compared with when nobody chose them:
+   *        those it takes its images from.
+   *
+   * The input on the left is then the very file the project processes, not a
+   * copy that may have been cleaned, resized or padded since.
+   */
+  static QStringList automaticVerificationInputs(const ProjectPages& pages);
+
+  /** \brief What the input side says when it has no image for \p projectImage. */
+  QString verificationMissingMessage(const ImageId& projectImage) const;
+
+  /** \brief Puts the "Compare with input" button on the left, above the stages. */
+  void setupCompareToggle();
+
+  /** \brief Shows the open project beside its input images, or stops. */
+  void setCompareMode(bool on);
+
+  /** \brief Offers retouching where it can be done: at the Output stage of an open project, outside a batch. */
+  void updateRetouchAvailability();
+
+  /** \brief Compares with input folders the operator chooses. */
+  void chooseCompareFolders();
+
+  /** \brief Applies a change of comparison mode or folders: history, title, button, view. */
+  void compareModeChanged();
+
+  void updateCompareToggle();
 
   QSizeF m_maxLogicalThumbSize;
   std::shared_ptr<ProjectPages> m_pages;
@@ -504,6 +541,8 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Retouc
   bool m_showingRetouchEditor = false;
   /** Null unless this copy updates itself. \see startUpdateChecks() */
   AppUpdater* m_updater = nullptr;
+  /** Turns comparing with the input images on and off. \see setupCompareToggle() */
+  QAction* m_compareAction = nullptr;
   /** Set while closing the application waits on the project being closed. \see timerEvent() */
   bool m_closingProject = false;
 };

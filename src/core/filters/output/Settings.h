@@ -6,7 +6,11 @@
 
 #include <DistortionModel.h>
 
+#include <OutputLayer.h>
+
 #include <QMutex>
+#include <QSize>
+#include <QTransform>
 #include <memory>
 #include <unordered_map>
 
@@ -93,11 +97,35 @@ class Settings {
 
   void setBlackOnWhite(const PageId& pageId, bool blackOnWhite);
 
+  /** \brief The retouching of the page's output, kept with the project. */
+  retouch::OutputLayer retouchForPage(const PageId& pageId) const;
+
+  /** \brief An empty \p layer removes the page's retouching. */
+  void setRetouch(const PageId& pageId, const retouch::OutputLayer& layer);
+
+  /**
+   * \brief How the page's output was last made from its image.
+   *
+   * What retouching painted on that output is relative to. Known once the
+   * Output stage has run for the page in this session; not saved.
+   */
+  struct OutputGeometry {
+    QTransform originalToOutput;
+    QSize size;
+    bool dewarped = false;
+  };
+
+  bool outputGeometry(const PageId& pageId, OutputGeometry* geometry) const;
+
+  void setOutputGeometry(const PageId& pageId, const OutputGeometry& geometry);
+
  private:
   using PerPageParams = std::unordered_map<PageId, Params>;
   using PerPageOutputParams = std::unordered_map<PageId, OutputParams>;
   using PerPageZones = std::unordered_map<PageId, ZoneSet>;
   using PerPageOutputProcessingParams = std::unordered_map<PageId, OutputProcessingParams>;
+  using PerPageRetouch = std::unordered_map<PageId, retouch::OutputLayer>;
+  using PerPageOutputGeometry = std::unordered_map<PageId, OutputGeometry>;
 
   static PropertySet initialPictureZoneProps();
 
@@ -111,6 +139,8 @@ class Settings {
   PropertySet m_defaultPictureZoneProps;
   PropertySet m_defaultFillZoneProps;
   PerPageOutputProcessingParams m_perPageOutputProcessingParams;
+  PerPageRetouch m_perPageRetouch;
+  PerPageOutputGeometry m_perPageOutputGeometry;
 };
 }  // namespace output
 #endif  // ifndef SCANTAILOR_OUTPUT_SETTINGS_H_

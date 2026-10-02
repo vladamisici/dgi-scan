@@ -203,6 +203,7 @@ Worker and helper threads:
 | `image.load` (`w`, `h`, `mb`) | worker, thumbs | decoding an image file |
 | `stage.fix_orientation` ... `stage.output` | worker | processing stages (inclusive, see above) |
 | `output.generate`, `output.write` | worker | output generation and writing |
+| `output.retouch` (`edits`, `applied`) | worker | painting a page's retouching over its output made afresh |
 | `tiff.write` (`w`, `h`, `mb`, `ok`) | worker | writing a TIFF |
 | `thumbs.ensure_exists`, `thumbs.recreate` | worker | thumbnail files |
 | `thumbs.bg.load` (`source`: `cache` / `image`) | thumbs | background thumbnail loading |
