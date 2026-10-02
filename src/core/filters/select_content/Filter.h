@@ -69,12 +69,13 @@ class Filter : public AbstractFilter {
   OptionsWidget* optionsWidget();
 
   /**
-   * \brief Makes every page cut from \p imageId have its boxes found again,
-   *        each the way its mode says, the next time it is processed.
+   * \brief Makes every page cut from \p imageId have its content box found
+   *        again, the next time it is processed.
    *
    * For when the image's pixels have changed - a stamp painted over - which
    * leaves its geometry as it was, and the geometry is all that would make
-   * them be looked for again. A box set by hand stays where it was.
+   * it be looked for again. Whatever the page's mode, but for a box set by
+   * hand, which stays where it was. \see Settings::requestRedetection()
    */
   void redetect(const ImageId& imageId);
 

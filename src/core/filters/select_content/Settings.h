@@ -9,6 +9,7 @@
 #include <QMutex>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "NonCopyable.h"
 #include "PageId.h"
@@ -47,11 +48,27 @@ class Settings {
 
   const DeviationProvider<PageId>& deviationProvider() const;
 
+  /**
+   * \brief Asks for the page's content box to be found again, the next time
+   *        the page is processed, whatever its mode but manual.
+   *
+   * For when its image's pixels changed - a stamp painted out. Its mode is
+   * kept: a page whose box was found once and then frozen ("disabled") gets
+   * the box found in what is left, frozen in turn. Not saved with the project.
+   */
+  void requestRedetection(const PageId& pageId);
+
+  bool isRedetectionRequested(const PageId& pageId) const;
+
+  /** \brief The request has been met: the box found has been stored. */
+  void clearRedetection(const PageId& pageId);
+
  private:
   using PageParams = std::unordered_map<PageId, Params>;
 
   mutable QMutex m_mutex;
   PageParams m_pageParams;
+  std::unordered_set<PageId> m_redetectionRequests;
   QSizeF m_pageDetectionBox;
   double m_pageDetectionTolerance;
   DeviationProvider<PageId> m_deviationProvider;

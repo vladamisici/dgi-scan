@@ -31,7 +31,23 @@ Settings::~Settings() = default;
 void Settings::clear() {
   QMutexLocker locker(&m_mutex);
   m_pageParams.clear();
+  m_redetectionRequests.clear();
   m_deviationProvider.clear();
+}
+
+void Settings::requestRedetection(const PageId& pageId) {
+  QMutexLocker locker(&m_mutex);
+  m_redetectionRequests.insert(pageId);
+}
+
+bool Settings::isRedetectionRequested(const PageId& pageId) const {
+  QMutexLocker locker(&m_mutex);
+  return m_redetectionRequests.count(pageId) != 0;
+}
+
+void Settings::clearRedetection(const PageId& pageId) {
+  QMutexLocker locker(&m_mutex);
+  m_redetectionRequests.erase(pageId);
 }
 
 void Settings::performRelinking(const AbstractRelinker& relinker) {

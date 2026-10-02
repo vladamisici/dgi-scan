@@ -134,6 +134,24 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data) 
     }
   }
 
+  // The image's pixels changed - a stamp painted out - so the content is found
+  // again in what is left: whatever the mode, but for a box set by hand. A
+  // page whose box was found once and then frozen keeps its mode, and gets the
+  // new box frozen in turn rather than the whole page its mode would give it.
+  const bool redetect = m_settings->isRedetectionRequested(m_pageId);
+  if (redetect && (newParams.contentDetectionMode() != MODE_MANUAL)) {
+    const QRectF pageRect(newParams.pageRect());
+    QRectF contentRect(ContentBoxFinder::findContentBox(status, data, pageRect, m_dbg.get()));
+    if (contentRect.isValid()) {
+      contentRect &= pageRect;
+    } else if (newParams.contentDetectionMode() == MODE_DISABLED) {
+      // Nothing left on it: what that mode gives a page.
+      contentRect = pageRect;
+    }
+    newParams.setContentRect(contentRect);
+    newParams.setContentSizeMM(physSizeCalc.sizeMM(contentRect));
+  }
+
   OptionsWidget::UiData uiData;
   uiData.setSizeCalc(physSizeCalc);
   uiData.setContentRect(newParams.contentRect());
@@ -144,6 +162,9 @@ FilterResultPtr Task::process(const TaskStatus& status, const FilterData& data) 
   uiData.setFineTuneCornersEnabled(newParams.isFineTuningEnabled());
 
   m_settings->setPageParams(m_pageId, newParams);
+  if (redetect) {
+    m_settings->clearRedetection(m_pageId);
+  }
 
   status.throwIfCancelled();
 

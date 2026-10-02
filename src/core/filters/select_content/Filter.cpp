@@ -162,15 +162,9 @@ OptionsWidget* Filter::optionsWidget() {
 void Filter::redetect(const ImageId& imageId) {
   for (const PageId::SubPage subPage : {PageId::SINGLE_PAGE, PageId::LEFT_PAGE, PageId::RIGHT_PAGE}) {
     const PageId pageId(imageId, subPage);
-    std::unique_ptr<Params> params(m_settings->getPageParams(pageId));
-    if (!params) {
-      continue;
+    if (!m_settings->isParamsNull(pageId)) {
+      m_settings->requestRedetection(pageId);
     }
-    // An outline no page has: whatever the page is now, it does not match, so
-    // both boxes are looked for again - with the modes kept as they were.
-    params->setDependencies(Dependencies(QPolygonF(), params->contentDetectionMode(), params->pageDetectionMode(),
-                                         params->isFineTuningEnabled()));
-    m_settings->setPageParams(pageId, *params);
   }
 }
 
