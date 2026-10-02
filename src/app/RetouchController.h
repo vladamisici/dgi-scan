@@ -11,6 +11,7 @@
 #include <QPointer>
 #include <QSize>
 #include <QString>
+#include <QTransform>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -30,18 +31,22 @@ class RetouchView;
 class ThumbnailPixmapCache;
 
 /**
- * \brief The image file a page is retouched in, and how to show it.
+ * \brief The image a page is retouched on, and the file the changes go into.
  *
- * The input image of the page: in verification mode the one from the input
- * folders, shown on the left; otherwise the project's own source image.
+ * Usually the input image of the page: in compare mode the one shown on the
+ * left; otherwise the project's own source image. At the Output stage it is
+ * the page's output, painted on as it is shown, while the changes are carried
+ * into the project's image through the transform the output was made with:
+ * so that the steps run again on what is left - Select Content finding the
+ * content without the stamp, and the margins and the output following.
  */
 struct RetouchTarget {
-  /** The file to edit. */
+  /** The image edited: shown, and written into unless it is the output. */
   ImageId imageId;
   /**
-   * The project's own image of the page. Usually the same file; in
-   * verification mode the input image is a separate copy, and this one is
-   * changed along with it, so that the output loses what the input did.
+   * The project's own image of the page. Usually the same file; in compare
+   * mode the input image may be a separate copy, and this one is changed
+   * along with it, so that the output loses what the input did.
    */
   ImageId projectImageId;
   /** The size of projectImageId, as the project knows it. */
@@ -51,12 +56,10 @@ struct RetouchTarget {
   OrthogonalRotation rotation;
   /** The header over the image while it is being edited. */
   QString title;
-  /**
-   * The page's output. The edits are then kept with the project and painted
-   * over the output each time it is made, instead of being written into
-   * imageId - the output file, only shown.
-   */
+  /** Whether imageId is the page's output: painted on, never written. */
   bool output = false;
+  /** For the output: from its pixels to those of the project's image - crop, skew, rotation, resolution. */
+  QTransform outputToSource;
 
   /** \brief Whether the project's image is the very file being edited. */
   bool editsProjectImage() const;
@@ -110,18 +113,22 @@ class RetouchHost {
   virtual void retouchSourceReplaced(const ImageId& projectImageId) = 0;
 
   /**
-   * \brief Keeps \p edits, painted on \p page's output, with the project.
+   * \brief The view showing \p inputImage beside the output, if one is on screen.
    *
-   * The output is made again with them, and every time after.
-   *
-   * \return false, with the reason in \p error, if they could not be kept.
+   * In compare mode, at the Output stage. \p sx and \p sy are set to how its
+   * image's pixels relate to the file's: it may show a reduced copy.
    */
-  virtual bool retouchOutputSaved(const PageInfo& page, const std::vector<retouch::Edit>& edits, QString* error) = 0;
+  virtual ImageViewBase* retouchInputView(const ImageId& inputImage, double* sx, double* sy) const = 0;
 
-  /** \brief Whether \p page's output has retouching kept with the project. */
+  /**
+   * \brief Whether \p page's output has retouching kept with the project.
+   *
+   * Made by the version that painted on the output alone; its changes are put
+   * back along with the input image's.
+   */
   virtual bool retouchOutputHasEdits(const PageInfo& page) const = 0;
 
-  /** \brief Removes \p page's retouching; its output is made again without it. */
+  /** \brief Removes that retouching; the output is made again without it. */
   virtual void retouchOutputRestore(const PageInfo& page) = 0;
 };
 
@@ -178,8 +185,8 @@ class RetouchController : public QObject {
   void abandon();
 
   /**
-   * \brief Whether pages can be retouched at all, now: a project is open, no
-   *        batch is running, the Output stage is on screen. \p reason says why not.
+   * \brief Whether pages can be retouched at all, now: a project is open and no
+   *        batch is running. \p reason says why not, if it is anything else.
    */
   void setAvailable(bool available, const QString& reason = QString());
 
@@ -202,11 +209,8 @@ class RetouchController : public QObject {
   /** \return whether the file was written. Failures are reported. */
   bool save();
 
-  /** \brief save() for the page's output: the edits are kept with the project. */
+  /** \brief save() for edits painted on the output: carried into the project's image. */
   bool saveOutput(const std::vector<retouch::Edit>& edits);
-
-  /** \brief Removes the retouching of \p page's output, once the operator agrees. */
-  void restoreOutput(const PageInfo& page);
 
   void closeRequested();
 

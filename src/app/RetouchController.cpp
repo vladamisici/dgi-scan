@@ -5,6 +5,7 @@
 
 #include <Grayscale.h>
 #include <OriginalsBackup.h>
+#include <OutputLayer.h>
 #include <SourceFile.h>
 #include <core/CrashHandler.h>
 
@@ -289,12 +290,28 @@ void RetouchController::loaded(const int generation, const std::shared_ptr<Loade
     return;
   }
 
+  if (m_target.output) {
+    // What is painted on the output goes into the input image: one that cannot
+    // be written would leave the output keeping what was painted out.
+    if (!image->projectUnsupported.isEmpty()) {
+      reset();
+      updatePanel();
+      QMessageBox::information(m_window, tr("Retouch"),
+                               tr("The output's changes go into the page's input image, %1, which cannot be changed: "
+                                  "%2.")
+                                   .arg(displayNameOf(m_target.projectImageId), image->projectUnsupported));
+      return;
+    }
+    m_projectLoadedSize = image->projectSize;
+    m_projectLoadedTime = image->projectModified;
+  }
+
   // Whether, and how, the project's separate copy of the page gets the edits too.
   m_carryOver = false;
   m_carryX = 1.0;
   m_carryY = 1.0;
   m_carryNote.clear();
-  if (!m_target.projectImageId.isNull() && !m_target.editsProjectImage()) {
+  if (!m_target.output && !m_target.projectImageId.isNull() && !m_target.editsProjectImage()) {
     const QSize from(image->source.size());
     const QSize to(m_target.projectImageSize);
     const QString projectName(displayNameOf(m_target.projectImageId));
@@ -350,8 +367,18 @@ void RetouchController::loaded(const int generation, const std::shared_ptr<Loade
   m_host.retouchShowEditor(view, m_target.title, m_target.output);
 
   // The edits shown over the project's view of the page too, where they will
-  // land when saved.
-  if (m_carryOver || m_target.editsProjectImage()) {
+  // land when saved: painted on the output, over the input beside it, carried
+  // through the crop, skew and rotation - what the operator checks the
+  // carrying against.
+  if (m_target.output) {
+    double sx = 1.0;
+    double sy = 1.0;
+    if (ImageViewBase* inputView = m_host.retouchInputView(m_target.projectImageId, &sx, &sy)) {
+      auto* mirror = new RetouchMirror(view, inputView, m_target.outputToSource * QTransform::fromScale(sx, sy));
+      inputView->rootInteractionHandler().makeFirstPreceeder(*mirror);
+      connect(view, &RetouchView::editsChanged, inputView, [inputView]() { inputView->update(); });
+    }
+  } else if (m_carryOver || m_target.editsProjectImage()) {
     if (ImageViewBase* projectView = m_host.retouchProjectView()) {
       auto* mirror = new RetouchMirror(view, projectView, QTransform::fromScale(m_carryX, m_carryY));
       // Over the image, under the stage's own guides.
@@ -496,32 +523,99 @@ bool RetouchController::save() {
   }
   updatePanel();
   pageChanged();
-  showStatus(m_window,
-             projectWritten ? tr("Saved %1 and the project's copy. Run the steps again to update the output.").arg(name)
-                            : tr("Saved %1. The original is kept in the project's output folder.").arg(name),
-             10000);
+  QString status;
+  if (projectWritten) {
+    status = tr("Saved %1 and the project's copy. The page is processed again from Select Content on.").arg(name);
+  } else if (target.editsProjectImage()) {
+    status = tr("Saved %1; the original is kept in the project's output folder. The page is processed again from "
+                "Select Content on.")
+                 .arg(name);
+  } else {
+    status = tr("Saved %1; the original is kept in the project's output folder.").arg(name);
+  }
+  showStatus(m_window, status, 10000);
   return true;
 }
 
 bool RetouchController::saveOutput(const std::vector<Edit>& edits) {
-  const QString name(displayName());
-  QString error;
-  if (!m_host.retouchOutputSaved(m_page, edits, &error)) {
-    core::CrashHandler::log(QStringLiteral("Retouch: keeping %1 change(s) to the output of %2 failed: %3")
-                                .arg(edits.size())
-                                .arg(m_page.imageId().filePath(), error));
-    QMessageBox::warning(m_window, tr("Retouch"), tr("The changes to %1 could not be kept.\n\n%2").arg(name, error));
+  const RetouchTarget target(m_target);
+  const QString sourcePath(target.projectImageId.filePath());
+  const QString name(displayNameOf(target.projectImageId));
+  if (changedSince(sourcePath, m_projectLoadedSize, m_projectLoadedTime)) {
+    const QMessageBox::StandardButton answer
+        = QMessageBox::warning(m_window, tr("Retouch"),
+                               tr("%1 changed on disk since it was opened here, possibly by someone else.\n\n"
+                                  "Save over it anyway? The other changes would be lost.")
+                                   .arg(name),
+                               QMessageBox::Save | QMessageBox::Cancel, QMessageBox::Cancel);
+    if (answer != QMessageBox::Save) {
+      return false;
+    }
+  }
+
+  // From the output's pixels to the input image's: back through the crop,
+  // the skew, the rotation and the resolution the output was made with.
+  const std::vector<Edit> sourceEdits(transformed(edits, target.outputToSource));
+  if (sourceEdits.empty()) {
+    QMessageBox::information(m_window, tr("Retouch"), tr("The changes fall outside %1, so there is nothing to save.")
+                                                          .arg(name));
     return false;
   }
-  core::CrashHandler::log(QStringLiteral("Retouch: kept %1 change(s) to the output of %2 with the project")
+
+  const QString outputDir(m_host.retouchOutputDirectory());
+  const std::shared_ptr<ThumbnailPixmapCache> thumbnails(m_host.retouchThumbnailCache());
+  const Dpi projectDpi(m_page.metadata().dpi());
+  const int paperRing = std::max(4, qRound(projectDpi.horizontal() / 50.0));
+  QString error;
+  const bool ok = runWhileWaiting(tr("Saving %1...").arg(name), [&]() {
+    try {
+      OriginalsBackup backup(outputDir);
+      if (!backup.keep(sourcePath, &error)) {
+        error = tr("The original could not be kept, so nothing was changed.\n\n%1").arg(error);
+        return false;
+      }
+      const QImage source(ImageLoader::load(target.projectImageId));
+      if (source.isNull()) {
+        error = tr("%1 could not be read.").arg(name);
+        return false;
+      }
+      // Colours taken from the paper on the output - white, as often as not -
+      // are taken from the input's own paper instead.
+      QImage written;
+      if (!SourceFile::rewrite(target.projectImageId, carryOver(sourceEdits, 1.0, 1.0, source, paperRing), &written,
+                               &error)) {
+        return false;
+      }
+      if (thumbnails && !written.isNull()) {
+        thumbnails->recreateThumbnail(target.projectImageId, displayForm(written, projectDpi));
+      }
+      return true;
+    } catch (const std::bad_alloc&) {
+      error = tr("There is not enough memory to save it.");
+    } catch (const std::exception& e) {
+      error = QString::fromLocal8Bit(e.what());
+    }
+    return false;
+  });
+  if (!ok) {
+    core::CrashHandler::log(QStringLiteral("Retouch: carrying %1 change(s) from the output into %2 failed: %3")
+                                .arg(edits.size())
+                                .arg(sourcePath, error));
+    QMessageBox::warning(m_window, tr("Retouch"), tr("%1 could not be saved.\n\n%2").arg(name, error));
+    return false;
+  }
+  core::CrashHandler::log(QStringLiteral("Retouch: carried %1 change(s) painted on the output into %2")
                               .arg(edits.size())
-                              .arg(m_page.imageId().filePath()));
+                              .arg(sourcePath));
   reset();
+  // The content is found anew in what is left, and the margins and the output follow.
+  m_host.retouchSourceReplaced(target.projectImageId);
   updatePanel();
   pageChanged();
   showStatus(m_window,
-             tr("The changes are kept with the project and painted over the output, now and whenever it is made "
-                "again. Save the project to keep them."),
+             tr("Saved into %1; the original is kept in the project's output folder. The page is processed again "
+                "from Select Content on.")
+                 .arg(name),
              12000);
   return true;
 }
@@ -564,7 +658,8 @@ bool RetouchController::finish() {
                     tr("%1 has %n unsaved change(s).", nullptr, count).arg(displayName()), QMessageBox::NoButton,
                     m_window);
     box.setInformativeText(m_target.output
-                               ? tr("Save keeps them with the project and paints them over the page's output.")
+                               ? tr("Save carries them into the page's input image - a copy of the original is kept - "
+                                    "and the page is processed again.")
                                : tr("Save writes them into the image file; a copy of the original is kept."));
     QPushButton* saveButton = box.addButton(tr("Save"), QMessageBox::AcceptRole);
     QPushButton* discardButton = box.addButton(tr("Discard"), QMessageBox::DestructiveRole);
@@ -609,9 +704,12 @@ void RetouchController::restoreRequested() {
     }
   }
   if (target.output) {
-    restoreOutput(page);
-    return;
+    // What was painted on the output went into the input image: that is what is put back.
+    target.imageId = target.projectImageId;
+    target.output = false;
   }
+  // Retouching an earlier version kept with the project, over the output alone.
+  const bool outputLayer = m_host.retouchOutputHasEdits(page);
   const QString path(target.imageId.filePath());
   const bool separateCopy = !target.projectImageId.isNull() && !target.editsProjectImage();
   const QString projectPath(target.projectImageId.filePath());
@@ -620,8 +718,25 @@ void RetouchController::restoreRequested() {
   const bool restoreInput = backup.contains(path);
   const bool restoreProject = separateCopy && backup.contains(projectPath);
   if (!restoreInput && !restoreProject) {
+    if (outputLayer
+        && (QMessageBox::question(m_window, tr("Restore Original"),
+                                  tr("Remove the retouching painted over the output of %1?")
+                                      .arg(displayNameOf(page.imageId())),
+                                  QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel)
+            == QMessageBox::Yes)) {
+      m_host.retouchOutputRestore(page);
+      core::CrashHandler::log(QStringLiteral("Retouch: removed the retouching of the output of %1")
+                                  .arg(page.imageId().filePath()));
+      reset();
+      updatePanel();
+      m_host.retouchSessionEnded();
+      return;
+    }
     pageChanged();
     return;
+  }
+  if (outputLayer) {
+    m_host.retouchOutputRestore(page);
   }
   const QString name(displayNameOf(target.imageId));
   QString question(restoreProject && restoreInput
@@ -682,28 +797,6 @@ void RetouchController::restoreRequested() {
   m_host.retouchSessionEnded();
 }
 
-void RetouchController::restoreOutput(const PageInfo& page) {
-  if (!m_host.retouchOutputHasEdits(page)) {
-    pageChanged();
-    return;
-  }
-  QString question(tr("Remove all the retouching of the output of %1?").arg(displayNameOf(page.imageId())));
-  if (hasUnsavedEdits()) {
-    question += QLatin1String("\n\n") + tr("The unsaved changes will be discarded.");
-  }
-  if (QMessageBox::question(m_window, tr("Restore Original"), question, QMessageBox::Yes | QMessageBox::Cancel,
-                            QMessageBox::Cancel)
-      != QMessageBox::Yes) {
-    return;
-  }
-  m_host.retouchOutputRestore(page);
-  core::CrashHandler::log(QStringLiteral("Retouch: removed the retouching of the output of %1")
-                              .arg(page.imageId().filePath()));
-  reset();
-  updatePanel();
-  m_host.retouchSessionEnded();
-}
-
 void RetouchController::abandon() {
   if (m_state == IDLE) {
     return;
@@ -734,14 +827,12 @@ void RetouchController::pageChanged() {
     QString whyNot;
     const PageInfo page(m_host.retouchCurrentPage());
     if (isActive() || (!page.isNull() && m_host.retouchTarget(page, &target, &whyNot))) {
-      if (target.output) {
-        backedUp = m_host.retouchOutputHasEdits(isActive() ? m_page : page);
-      } else {
-        const OriginalsBackup backup(outputDir);
-        backedUp = backup.contains(target.imageId.filePath())
-                   || (!target.projectImageId.isNull() && !target.editsProjectImage()
-                       && backup.contains(target.projectImageId.filePath()));
-      }
+      // The output's changes are in the project's image, so its original is what there is to restore.
+      const OriginalsBackup backup(outputDir);
+      backedUp = (!target.output && backup.contains(target.imageId.filePath()))
+                 || (!target.projectImageId.isNull() && !target.editsProjectImage()
+                     && backup.contains(target.projectImageId.filePath()))
+                 || m_host.retouchOutputHasEdits(isActive() ? m_page : page);
     }
   }
   m_panel.setRestoreAvailable(backedUp);

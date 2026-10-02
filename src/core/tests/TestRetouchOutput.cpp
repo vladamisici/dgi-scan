@@ -164,5 +164,32 @@ BOOST_AUTO_TEST_CASE(black_and_white_output_keeps_its_format) {
   BOOST_CHECK_EQUAL(blackPixels(output, output.rect()), 0);
 }
 
+// Painted on the output, carried back into the input image through the crop,
+// the skew and the resolution the output was made with: it lands on what it
+// covered there, and on nothing else.
+BOOST_AUTO_TEST_CASE(output_edits_land_on_the_input_through_the_transform) {
+  QImage source(1000, 1200, QImage::Format_Grayscale8);
+  source.fill(255);
+  const QRect stamp(300, 400, 60, 30);
+  const QRect text(600, 900, 80, 20);
+  {
+    QPainter painter(&source);
+    painter.fillRect(stamp, Qt::black);
+    painter.fillRect(text, Qt::black);
+  }
+
+  QTransform toOutput;
+  toOutput.rotate(2.0);
+  toOutput *= QTransform::fromScale(2.0, 2.0);
+  toOutput *= QTransform::fromTranslate(-450, -700);
+  // Where the stamp is on the output, with a little to spare, as an operator would drag it.
+  const QRect onOutput(toOutput.mapRect(QRectF(stamp)).toAlignedRect().adjusted(-2, -2, 2, 2));
+
+  retouch::applyEdits(source, retouch::transformed({Edit::rect(onOutput, Qt::white)}, toOutput.inverted()));
+  BOOST_CHECK_EQUAL(blackPixels(source, stamp), 0);
+  BOOST_CHECK_EQUAL(blackPixels(source, text), 80 * 20);
+  BOOST_CHECK(source.format() == QImage::Format_Grayscale8);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 }  // namespace Tests

@@ -1464,7 +1464,7 @@ void MainWindow::filterSelectionChanged(const QItemSelection& selected) {
   }
 
   updateMainArea();
-  // Retouching is done on the output, so only at the Output stage.
+  // Retouching works on the output at the Output stage, and on the input image before it.
   updateRetouchAvailability();
 }  // MainWindow::filterSelectionChanged
 
@@ -3390,49 +3390,78 @@ PageInfo MainWindow::retouchCurrentPage() const {
 }
 
 bool MainWindow::retouchAllowed() const {
-  return isProjectLoaded() && !isBatchProcessingInProgress() && isOutputFilter();
+  return isProjectLoaded() && !isBatchProcessingInProgress();
 }
 
 void MainWindow::updateRetouchAvailability() {
-  if (!isProjectLoaded() || isBatchProcessingInProgress()) {
-    m_retouch->setAvailable(false);
-  } else if (!isOutputFilter()) {
-    m_retouch->setAvailable(false, tr("Retouching is done on the output: open the Output stage."));
-  } else {
-    m_retouch->setAvailable(true);
-  }
+  m_retouch->setAvailable(retouchAllowed());
 }
 
 bool MainWindow::retouchTarget(const PageInfo& page, RetouchTarget* target, QString* whyNot) const {
-  // The output, where what is painted is what the page ends up with: no
-  // re-running of the steps, and nothing lost to a copy of another shape.
-  if (!isOutputFilter()) {
-    *whyNot = tr("Retouching is done on the output: open the Output stage.");
-    return false;
+  // The project's own image of the page gets the changes in every case.
+  target->projectImageId = page.imageId();
+  target->projectImageSize = page.metadata().size();
+  target->output = false;
+
+  if (isOutputFilter()) {
+    // Painted on the output as it is shown, and carried into the image back
+    // through the transform the output was made with - crop, skew, rotation,
+    // resolution - so that the steps run again on what is left.
+    QTransform toOutput;
+    bool dewarped = false;
+    if (!m_stages->outputFilter()->outputGeometry(page.id(), &toOutput, &dewarped)) {
+      *whyNot = tr("The page's output is still being made. Try again once it is shown.");
+      return false;
+    }
+    if (dewarped) {
+      *whyNot = tr("This page's output is dewarped, and its changes could not be placed on the input image exactly. "
+                   "Retouch the page at an earlier stage instead.");
+      return false;
+    }
+    bool invertible = false;
+    target->outputToSource = toOutput.inverted(&invertible);
+    const QString outputPath(m_outFileNameGen.filePathFor(page.id()));
+    if (!invertible || !QFileInfo::exists(outputPath)) {
+      *whyNot = tr("This page has no output yet. Let the Output stage finish making it, then retouch it.");
+      return false;
+    }
+    target->output = true;
+    target->imageId = ImageId(outputPath);
+    target->dpi = Dpi();
+    target->rotation = OrthogonalRotation();
+    target->title = tr("OUTPUT - RETOUCHING");
+    return true;
   }
-  const QString outputPath(m_outFileNameGen.filePathFor(page.id()));
-  if (!QFileInfo::exists(outputPath)) {
-    *whyNot = tr("This page has no output yet. Let the Output stage finish making it, then retouch it.");
-    return false;
+
+  if (m_verificationMode) {
+    // The input image on the left, as it is shown there: the file's own
+    // resolution, unrotated. When it is a separate copy, saving changes the
+    // project's image too, so that the output loses what the input did.
+    const ImageId original(verificationOriginalFor(page.imageId()));
+    if (original.isNull()) {
+      *whyNot = tr("No input image matching this page was found in the input folders, so there is nothing to "
+                   "retouch.");
+      return false;
+    }
+    target->imageId = original;
+    target->dpi = Dpi();
+    target->rotation = OrthogonalRotation();
+    target->title = tr("INPUT - RETOUCHING");
+    return true;
   }
-  target->output = true;
-  target->imageId = ImageId(outputPath);
-  target->projectImageId = ImageId();
-  target->projectImageSize = QSize();
-  target->dpi = Dpi();
-  target->rotation = OrthogonalRotation();
-  target->title = tr("OUTPUT - RETOUCHING");
+  target->imageId = page.imageId();
+  target->dpi = page.metadata().dpi();
+  target->rotation = m_stages->fixOrientationFilter()->rotationFor(page.imageId());
+  target->title = tr("SOURCE IMAGE - RETOUCHING");
   return true;
 }
 
-bool MainWindow::retouchOutputSaved(const PageInfo& page,
-                                    const std::vector<retouch::Edit>& edits,
-                                    QString* error) {
-  if (!m_stages->outputFilter()->addRetouch(page.id(), edits, error)) {
-    return false;
+ImageViewBase* MainWindow::retouchInputView(const ImageId& inputImage, double* sx, double* sy) const {
+  if (!m_verificationMode) {
+    return nullptr;
   }
-  m_thumbSequence->invalidateThumbnail(page.id());
-  return true;
+  VerificationView* verification = currentVerificationView();
+  return verification ? verification->inputImageView(inputImage, sx, sy) : nullptr;
 }
 
 bool MainWindow::retouchOutputHasEdits(const PageInfo& page) const {
@@ -3516,6 +3545,9 @@ void MainWindow::retouchSessionEnded() {
 }
 
 void MainWindow::retouchSourceReplaced(const ImageId& imageId) {
+  // A stamp painted out leaves the content box where it was: found again in
+  // what is left, it takes the margins and the output with it.
+  m_stages->selectContentFilter()->redetect(imageId);
   // The output is otherwise only regenerated when the source file's size
   // changes, which painting over an uncompressed scan does not do: without
   // this, running the output step again would keep the old pages.

@@ -4,9 +4,12 @@
 #ifndef SCANTAILOR_APP_VERIFICATIONVIEW_H_
 #define SCANTAILOR_APP_VERIFICATIONVIEW_H_
 
+#include <QPointer>
+#include <QSize>
 #include <QWidget>
 
 #include "ImageId.h"
+#include "ImageViewBase.h"
 
 class QFrame;
 class QImage;
@@ -64,11 +67,19 @@ class VerificationView : public QWidget {
   /** \brief The project's view of the page, on the right. */
   QWidget* projectView() const { return m_projectView; }
 
+  /**
+   * \brief The view of the input image, if it is \p expected, on screen, and not being edited.
+   *
+   * \p sx and \p sy are set to how the pixels of the image it shows relate to
+   * the file's: with low-resolution display it shows a reduced copy.
+   */
+  ImageViewBase* inputImageView(const ImageId& expected, double* sx, double* sy) const;
+
  private:
   class ImageLoadResult;
   class ImageLoaderTask;
 
-  void originalLoaded(const QImage& image, const QImage& downscaled);
+  void originalLoaded(const QImage& image, const QImage& downscaled, const QSize& fullSize);
 
   void showOriginalMessage(const QString& message);
 
@@ -93,6 +104,10 @@ class VerificationView : public QWidget {
   /** The input image, loaded once the input side is shown. */
   ImageId m_originalImage;
   bool m_originalRequested;
+  /** The view of it, once loaded; the size of the file's image, and of the one shown. */
+  QPointer<ImageViewBase> m_inputView;
+  QSize m_inputFullSize;
+  QSize m_inputShownSize;
   /** The input image's folder as its header names it, separator included; empty without an image. */
   QString m_inputFolder;
   /** The same for the right side. */

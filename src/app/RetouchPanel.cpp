@@ -156,12 +156,13 @@ void RetouchPanel::createActions() {
       = makeAction(QStringLiteral("retouch-close"), tr("Deselect"), tr("Clear the selection (Esc)."));
   m_clearSelectionAction->setShortcut(QKeySequence(Qt::Key_Escape));
   m_saveAction = makeAction(QStringLiteral("retouch-save"), tr("Save changes"),
-                            tr("Keep the changes with the project: they are painted over the page's output now, "
-                               "and again whenever it is made. Restore original removes them."));
+                            tr("Write the changes into the page's input image - painted on the output, they are "
+                               "carried into it - keeping a copy of the original. The page is then processed again "
+                               "from Select Content on."));
   m_closeAction = makeAction(QStringLiteral("retouch-close"), tr("Close"),
                              tr("Stop retouching this page. Unsaved changes are asked about first."));
   m_restoreAction = makeAction(QStringLiteral("retouch-restore"), tr("Restore original..."),
-                               tr("Remove all the retouching of this page's output."));
+                               tr("Put back the page's input image as it was before it was first retouched."));
   m_smallerBrushAction = makeAction(QString(), tr("Smaller brush"), QString());
   m_smallerBrushAction->setShortcut(QKeySequence(Qt::Key_BracketLeft));
   m_largerBrushAction = makeAction(QString(), tr("Larger brush"), QString());
@@ -308,9 +309,9 @@ QWidget* RetouchPanel::buildExpandedFace() {
   layout->addWidget(toolButton(m_restoreAction, true, face));
 
   layout->addStretch(1);
-  auto* help = new QLabel(tr("Changes are kept with the project and painted over the page's output, now and "
-                             "whenever it is made again. Middle button or Space+drag moves the image; the wheel "
-                             "zooms."),
+  auto* help = new QLabel(tr("Changes go into the page's input image - painted on the output, they are carried into "
+                             "it through the crop and the skew - and the page is processed again from Select "
+                             "Content on. Middle button or Space+drag moves the image; the wheel zooms."),
                           face);
   help->setWordWrap(true);
   help->setEnabled(false);
@@ -442,7 +443,7 @@ void RetouchPanel::setAvailable(const bool available, const QString& reason) {
     m_restoreAction->setEnabled(false);
     m_statusLabel->setText(reason.isEmpty() ? tr("Open a project to retouch its pages.") : reason);
   } else if (!m_sessionActive) {
-    m_statusLabel->setText(tr("Pick a tool to retouch this page's output."));
+    m_statusLabel->setText(tr("Pick a tool to retouch this page."));
   }
 }
 
@@ -462,7 +463,7 @@ void RetouchPanel::setSessionState(const bool loading,
     }
     m_statusLabel->setText(text);
   } else if (m_available) {
-    m_statusLabel->setText(tr("Pick a tool to retouch this page's output."));
+    m_statusLabel->setText(tr("Pick a tool to retouch this page."));
   }
   if (!editing) {
     setEditState(0, false, false);

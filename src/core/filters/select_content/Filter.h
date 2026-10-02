@@ -68,6 +68,16 @@ class Filter : public AbstractFilter {
 
   OptionsWidget* optionsWidget();
 
+  /**
+   * \brief Makes every page cut from \p imageId have its boxes found again,
+   *        each the way its mode says, the next time it is processed.
+   *
+   * For when the image's pixels have changed - a stamp painted over - which
+   * leaves its geometry as it was, and the geometry is all that would make
+   * them be looked for again. A box set by hand stays where it was.
+   */
+  void redetect(const ImageId& imageId);
+
  private:
   void writePageSettings(QDomDocument& doc, QDomElement& filterEl, const PageId& pageId, int numericId) const;
 

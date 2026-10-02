@@ -5,7 +5,6 @@
 
 #include <OrderByCompletenessProvider.h>
 #include <OutputLayer.h>
-#include <CrashHandler.h>
 
 #include <utility>
 
@@ -166,22 +165,13 @@ void Filter::invalidateOutputFor(const ImageId& imageId) {
   }
 }
 
-bool Filter::addRetouch(const PageId& pageId, const std::vector<retouch::Edit>& edits, QString* error) {
+bool Filter::outputGeometry(const PageId& pageId, QTransform* toOutput, bool* dewarped) const {
   Settings::OutputGeometry geometry;
   if (!m_settings->outputGeometry(pageId, &geometry)) {
-    *error = tr("The page's output has not been made in this session, so the changes cannot be placed on it. "
-                "Show the page at the Output stage and try again.");
     return false;
   }
-  bool dropped = false;
-  m_settings->setRetouch(pageId, m_settings->retouchForPage(pageId).adding(edits, geometry.originalToOutput,
-                                                                           geometry.size, geometry.dewarped, &dropped));
-  if (dropped) {
-    core::CrashHandler::log(QStringLiteral("Retouch: earlier retouching of %1 was made on a dewarped output that has "
-                                           "changed since, and was dropped")
-                                .arg(pageId.imageId().filePath()));
-  }
-  m_settings->removeOutputParams(pageId);
+  *toOutput = geometry.originalToOutput;
+  *dewarped = geometry.dewarped;
   return true;
 }
 

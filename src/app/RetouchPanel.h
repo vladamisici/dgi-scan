@@ -62,7 +62,7 @@ class RetouchPanel : public QFrame {
 
   /**
    * \brief Whether the tools can be used at all: a project is open, no batch is
-   *        running, the Output stage is on screen. \p reason says why not.
+   *        running. \p reason says why not, if it is anything else.
    */
   void setAvailable(bool available, const QString& reason = QString());
 

@@ -10,26 +10,39 @@ Downloads are on the [releases page](https://github.com/vladamisici/dgi-scan/rel
 the installer for normal use, the portable ZIP where administrator rights are
 not available.
 
-### Retouching the output
+### Retouching
 
-The Retouch panel, on the left of the page, paints over a page's output at the
-Output stage - to take a library stamp off a title page, say - without
-exporting the page to another program. Rectangle, Brush and Select object (one
-click takes a whole stamp: its letters and its frame) fill with white, with a
-colour picked from the page, or with the colour of the paper around each
-change. The panel collapses to a strip of icons when it is not needed; Tools >
-Retouch Panel hides it altogether.
+The Retouch panel, on the left of the page, paints over a page - to take a
+library stamp off a title page, say - without exporting it to another
+program. Rectangle, Brush and Select object (one click takes a whole stamp:
+its letters and its frame) fill with white, with a colour picked from the
+page, or with the colour of the paper around each change. The panel collapses
+to a strip of icons when it is not needed; Tools > Retouch Panel hides it
+altogether.
 
-Save changes keeps them with the project, like the fill zones, and the output
-is made again with them painted over it - and every time it is made after
-that, at another threshold or with other margins: the changes move with the
-page. Restore original removes them. They are part of the project, so the
-project has to be saved for them to last; a dewarped output whose geometry
-changes no longer gets them, which is logged.
+At the Output stage it paints on the output, as it is shown. Saving carries
+the changes back into the page's input image, through the transform the
+output was made with - the crop, the skew, the rotation and the resolution -
+and writes them there. At the stages before, it paints on the input image
+directly. Either way the input image is what changes, and the page is then
+processed again: Select Content finds the content anew in what is left - a
+box set by hand stays where it was - and the margins and the output follow.
+In Compare with Input, each change painted on the output is shown on the input
+beside it as it is made, where it will land.
 
-Earlier versions retouched the input image file instead. What they changed
-stays changed, with the original kept in the project's output folder under
-`cache/retouch-originals`.
+Nothing is written until Save changes. The file keeps its format: TIFF is
+re-encoded with its own compression, bit depth, resolution and colour profile,
+and JPEG has only the 8x8 blocks that changed encoded again, the rest carried
+over bit for bit. Before a file is first changed, a copy of the original is
+kept in the project's output folder, under `cache/retouch-originals`, and
+Restore original puts it back. Files are written in place, never through a
+rename: the network shares the operators work on can refuse renaming and
+deleting while allowing writes. A dewarped output cannot be matched to its
+input exactly, so such a page is retouched at an earlier stage.
+
+Version 1.0.16-dgi.14 kept retouching of the output with the project instead,
+painted over the output each time it was made. A project that has some still
+gets it, and Restore original removes it.
 
 ### Comparing with the input
 

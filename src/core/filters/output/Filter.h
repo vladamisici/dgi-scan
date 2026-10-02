@@ -4,12 +4,10 @@
 #ifndef SCANTAILOR_OUTPUT_FILTER_H_
 #define SCANTAILOR_OUTPUT_FILTER_H_
 
-#include <Edit.h>
-
 #include <QCoreApplication>
 #include <QImage>
+#include <QTransform>
 #include <memory>
-#include <vector>
 
 #include "AbstractFilter.h"
 #include "FillZonePropFactory.h"
@@ -64,19 +62,20 @@ class Filter : public AbstractFilter {
   void invalidateOutputFor(const ImageId& imageId);
 
   /**
-   * \brief Adds \p edits, painted on the page's output as it is now, to the page's retouching.
+   * \brief How the page's output on screen was made from its image.
    *
-   * The output is made again, with them, the next time the page is processed;
-   * every time after that too. \see retouch::OutputLayer
-   *
-   * \return false, with the reason in \p error, if the page's output has not
-   *         been made in this session, so the edits could not be placed on it.
+   * \param toOutput From the image's pixels to the output's: rotation, skew,
+   *        crop and resolution, all of it.
+   * \param dewarped Whether the output was dewarped too, which \p toOutput
+   *        does not describe.
+   * \return false if the page's output has not been made in this session.
    */
-  bool addRetouch(const PageId& pageId, const std::vector<retouch::Edit>& edits, QString* error);
+  bool outputGeometry(const PageId& pageId, QTransform* toOutput, bool* dewarped) const;
 
+  /** \brief Whether the page's output has retouching painted over it, kept with the project. */
   bool hasRetouch(const PageId& pageId) const;
 
-  /** \brief Removes the page's retouching; its output is made again without it. */
+  /** \brief Removes that retouching; the output is made again without it. */
   void clearRetouch(const PageId& pageId);
 
   std::shared_ptr<Task> createTask(const PageId& pageId,

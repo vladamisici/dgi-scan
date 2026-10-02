@@ -415,7 +415,7 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Retouc
 
   void retouchSourceReplaced(const ImageId& imageId) override;
 
-  bool retouchOutputSaved(const PageInfo& page, const std::vector<retouch::Edit>& edits, QString* error) override;
+  ImageViewBase* retouchInputView(const ImageId& inputImage, double* sx, double* sy) const override;
 
   bool retouchOutputHasEdits(const PageInfo& page) const override;
 
@@ -468,7 +468,7 @@ class MainWindow : public QMainWindow, private FilterUiInterface, private Retouc
   /** \brief Shows the open project beside its input images, or stops. */
   void setCompareMode(bool on);
 
-  /** \brief Offers retouching where it can be done: at the Output stage of an open project, outside a batch. */
+  /** \brief Offers retouching when it can be done: an open project, outside a batch. */
   void updateRetouchAvailability();
 
   /** \brief Compares with input folders the operator chooses. */

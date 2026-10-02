@@ -137,12 +137,15 @@ class InputStrip : public QFrame {
 
 class VerificationView::ImageLoadResult : public AbstractCommand<void> {
  public:
-  ImageLoadResult(QPointer<VerificationView> owner, QImage image, QImage downscaled)
-      : m_owner(std::move(owner)), m_image(std::move(image)), m_downscaled(std::move(downscaled)) {}
+  ImageLoadResult(QPointer<VerificationView> owner, QImage image, QImage downscaled, const QSize& fullSize)
+      : m_owner(std::move(owner)),
+        m_image(std::move(image)),
+        m_downscaled(std::move(downscaled)),
+        m_fullSize(fullSize) {}
 
   void operator()() override {
     if (VerificationView* owner = m_owner) {
-      owner->originalLoaded(m_image, m_downscaled);
+      owner->originalLoaded(m_image, m_downscaled, m_fullSize);
     }
   }
 
@@ -150,6 +153,7 @@ class VerificationView::ImageLoadResult : public AbstractCommand<void> {
   QPointer<VerificationView> m_owner;
   QImage m_image;
   QImage m_downscaled;
+  QSize m_fullSize;
 };
 
 class VerificationView::ImageLoaderTask : public AbstractCommand<BackgroundExecutor::TaskResultPtr> {
@@ -158,6 +162,7 @@ class VerificationView::ImageLoaderTask : public AbstractCommand<BackgroundExecu
 
   BackgroundExecutor::TaskResultPtr operator()() override {
     QImage image = ImageLoader::load(m_imageId);
+    const QSize fullSize(image.size());
     // Downscaled here, on the background thread. Done in originalLoaded(), it
     // ran on the GUI thread - an area average over the whole original, after a
     // full 1-bit to 8-bit conversion for bitonal scans - on every page shown.
@@ -170,7 +175,7 @@ class VerificationView::ImageLoaderTask : public AbstractCommand<BackgroundExecu
         image = downscaled;
       }
     }
-    return std::make_shared<ImageLoadResult>(m_owner, image, downscaled);
+    return std::make_shared<ImageLoadResult>(m_owner, image, downscaled, fullSize);
   }
 
  private:
@@ -298,7 +303,7 @@ void VerificationView::setProjectEditor(QWidget* editor, const QString& title) {
   editor->setFocus();
 }
 
-void VerificationView::originalLoaded(const QImage& image, const QImage& downscaled) {
+void VerificationView::originalLoaded(const QImage& image, const QImage& downscaled, const QSize& fullSize) {
   if (m_editing) {
     // The editor shows the same file; the read-only copy would take its place.
     return;
@@ -310,6 +315,19 @@ void VerificationView::originalLoaded(const QImage& image, const QImage& downsca
 
   auto* view = new BasicImageView(image, downscaled, Margins());
   m_originalStack->setCurrentIndex(m_originalStack->addWidget(view));
+  m_inputView = view;
+  m_inputFullSize = fullSize;
+  m_inputShownSize = image.size();
+}
+
+ImageViewBase* VerificationView::inputImageView(const ImageId& expected, double* sx, double* sy) const {
+  if (!m_inputView || m_editing || !m_inputPanel->isVisible() || !(m_originalImage == expected)
+      || m_inputFullSize.isEmpty()) {
+    return nullptr;
+  }
+  *sx = double(m_inputShownSize.width()) / m_inputFullSize.width();
+  *sy = double(m_inputShownSize.height()) / m_inputFullSize.height();
+  return m_inputView;
 }
 
 void VerificationView::showOriginalMessage(const QString& message) {
